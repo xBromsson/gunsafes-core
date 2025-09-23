@@ -3,7 +3,7 @@
 namespace GUNSAFES_Core;
 
 if (!defined('ABSPATH')) exit;
-
+//
 class Admin
 {
     public function register(): void
