@@ -17,4 +17,4 @@ require __DIR__ . '/includes/Plugin.php';
 
 add_action('plugins_loaded', function () {
     (new GUNSAFES_Core\Plugin())->boot();
-})
+});
