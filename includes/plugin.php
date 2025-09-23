@@ -12,6 +12,6 @@ class Plugin
             $admin = new Admin();
             $admin->register();
         }
-        // add public hooks later as needed
+        // add public hooks later as needed l
     }
 }
