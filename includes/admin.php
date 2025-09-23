@@ -1,7 +1,5 @@
 <?php
 
-namespace GUNSAFES_Core;
-
 if (!defined('ABSPATH')) exit;
 //
 class Admin
