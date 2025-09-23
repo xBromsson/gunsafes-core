@@ -2,7 +2,7 @@
 
 /**
  * Plugin Name: Gunsafes Core
- * Description: Custom plugin to handle gunsafes unique ecommerce needs
+ * Description: Custom plugin to handle gunsafes unique ecommerce integrations and workflows
  * Version: 0.1.0
  * Author: Code Blueprint
  * Text Domain: gunsafes-core
