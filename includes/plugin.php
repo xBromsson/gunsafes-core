@@ -1,13 +1,13 @@
 <?php
 
-namespace GUNSAFES_Core;
-
 if (!defined('ABSPATH')) exit;
 
 require __DIR__ . '/Admin.php';
 
-class Plugin {
-    public function boot(): void {
+class Plugin
+{
+    public function boot(): void
+    {
         if (is_admin()) {
             (new Admin())->register();
         }

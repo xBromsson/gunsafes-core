@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Plugin Name: Gunsafes Core
  * Description: Custom plugin to handle gunsafes unique ecommerce needs
@@ -16,5 +17,5 @@ define('GUNSAFES_CORE_VER', '0.1.0');
 require __DIR__ . '/includes/Plugin.php';
 
 add_action('plugins_loaded', function () {
-    (new GUNSAFES_Core\Plugin())->boot();
+    (new Plugin())->boot();
 });
