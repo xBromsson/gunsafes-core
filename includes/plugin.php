@@ -9,7 +9,8 @@ class Plugin
     public function boot(): void
     {
         if (is_admin()) {
-            (new Admin())->register();
+            $admin = new Admin();
+            $admin->register();
         }
         // add public hooks later as needed
     }
