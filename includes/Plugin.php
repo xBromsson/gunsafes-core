@@ -9,8 +9,7 @@ class Plugin
     public function boot(): void
     {
         if (is_admin()) {
-            $admin = new Admin();
-            $admin->register();
+            $admin_order = new Admin_Order();
         }
         // add public hooks later as needed.
     }

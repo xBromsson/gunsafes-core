@@ -1,53 +1,46 @@
 <?php
+if (!defined('ABSPATH')) {
+    exit; // Exit if accessed directly
+}
 
-if (!defined('ABSPATH')) exit;
-//
-class Admin
-{
-    public function register(): void
-    {
-        add_action('admin_menu', [$this, 'menu']);
-        add_action('admin_enqueue_scripts', [$this, 'assets']);
-    }
+// Prevent direct file access and ensure WooCommerce is active
+if (!class_exists('WooCommerce')) {
+    return; // Exit if WooCommerce is not active
+}
 
-    public function menu(): void
-    {
-        add_menu_page(
-            'Gunsafes Core',
-            'Gunsafes Core',
-            'manage_options',
-            'gunsafes-core',
-            [$this, 'screen'],
-            'dashicons-admin-generic',
-            60
-        );
-    }
-
-    public function screen(): void
-    {
-        if ($_SERVER['REQUEST_METHOD'] === 'POST' && check_admin_referer('gs_save')) {
-            update_option('gs_demo', sanitize_text_field($_POST['gs_demo'] ?? ''));
-            echo '<div class="notice notice-success is-dismissible"><p>Saved.</p></div>';
+class Admin_Order {
+    public function __construct() {
+        // Restrict to admins (can adjust later if needed)
+        if (!current_user_can('manage_woocommerce')) {
+            return;
         }
-?>
-        <div class="wrap">
-            <h1>Gunsafes Core</h1>
-            <form method="post">
-                <?php wp_nonce_field('gs_save'); ?>
-                <p>
-                    <label>Example setting:
-                        <input type="text" name="gs_demo" value="<?php echo esc_attr(get_option('gs_demo', 'Hello World')); ?>">
-                    </label>
-                </p>
-                <p><button class="button button-primary">Save</button></p>
-            </form>
-        </div>
-<?php
+
+        // Register hooks for order screen customizations
+        $this->register();
     }
 
-    public function assets(): void
-    {
-        wp_enqueue_style('gs-admin', GUNSAFES_CORE_URL . 'assets/admin.css', [], GUNSAFES_CORE_VER);
-        wp_enqueue_script('gs-admin', GUNSAFES_CORE_URL . 'assets/admin.js', ['jquery'], GUNSAFES_CORE_VER, true);
+    public function register(): void {
+        // Hook into WooCommerce admin order actions (to be filled in later)
+        add_action('woocommerce_admin_order_data_after_order_details', [$this, 'add_custom_fields']);
+        add_action('woocommerce_admin_order_item_add_line_buttons', [$this, 'add_custom_buttons']);
+
+        // Enqueue assets for the order screen
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
+    }
+
+    public function add_custom_fields($order): void {
+        // Placeholder for custom fields (e.g., Sales Rep)
+        // Will be implemented step-by-step
+    }
+
+    public function add_custom_buttons($order): void {
+        // Placeholder for custom buttons (e.g., APF modal trigger)
+        // Will be implemented step-by-step
+    }
+
+    public function enqueue_assets(): void {
+        // Enqueue styles and scripts specific to the order screen
+        wp_enqueue_style('gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/css/admin.css', [], GUNSAFES_CORE_VER);
+        wp_enqueue_script('gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/js/admin.js', ['jquery'], GUNSAFES_CORE_VER, true);
     }
 }
