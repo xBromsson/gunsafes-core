@@ -2,7 +2,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-require __DIR__ . '/Admin.php';
+require __DIR__ . '/admin/admin-order.php';
 
 class Plugin
 {

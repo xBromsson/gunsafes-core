@@ -14,7 +14,7 @@ define('GUNSAFES_CORE_PATH', plugin_dir_path(__FILE__));
 define('GUNSAFES_CORE_URL', plugin_dir_url(__FILE__));
 define('GUNSAFES_CORE_VER', '0.1.0');
 
-require __DIR__ . '/includes/Plugin.php';
+require __DIR__ . '/includes/plugin.php';
 
 add_action('plugins_loaded', function () {
     $plugin = new Plugin();
