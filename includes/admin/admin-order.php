@@ -9,11 +9,11 @@ if (!class_exists('WooCommerce')) {
 }
 
 /**
- * Handles custom admin order screen functionality, including Sales Rep field.
+ * Handles custom admin order screen functionality, including Sales Rep field and Flexible Shipping methods.
  */
 class Admin_Order {
     public function __construct() {
-        // Restrict to admins (can adjust later if needed)
+        // Restrict to admins
         if (!current_user_can('manage_woocommerce')) {
             return;
         }
@@ -30,6 +30,12 @@ class Admin_Order {
         // Save the Sales Rep field with higher priority for HPOS compatibility
         add_action('woocommerce_process_shop_order_meta', [$this, 'save_sales_rep_field'], 100, 2);
 
+        // Add Flexible Shipping instances to the shipping methods dropdown
+        add_filter('woocommerce_shipping_methods', [$this, 'add_flexible_shipping_instances']);
+
+        // Update shipping name on save
+        add_action('woocommerce_saved_order_items', [$this, 'update_shipping_name'], 10, 2);
+
         // Enqueue assets for the order screen
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
     }
@@ -40,12 +46,12 @@ class Admin_Order {
      * @param WC_Order $order The current order object.
      */
     public function add_custom_fields($order): void {
-        // Get the current logged-in user as default (only if no saved value)
+        // Get the current logged-in user as default
         $current_user = wp_get_current_user();
         $default_sales_rep = $current_user->user_login;
-        $saved_sales_rep = $order->get_meta('_sales_rep', true); // Use WC_Order method for HPOS compatibility
+        $saved_sales_rep = $order->get_meta('_sales_rep', true);
 
-        // Get admin users for the dropdown
+        // Get admin users for the Sales Rep dropdown
         $admin_users = get_users([
             'role__in' => ['administrator'],
             'fields' => ['ID', 'user_login', 'display_name']
@@ -79,6 +85,58 @@ class Admin_Order {
     }
 
     /**
+     * Adds each Flexible Shipping instance as a separate shipping method for the "Add shipping" dropdown.
+     *
+     * @param array $methods Existing shipping methods.
+     * @return array Modified shipping methods.
+     */
+    public function add_flexible_shipping_instances($methods): array {
+        global $wpdb;
+
+        // Fetch all enabled Flexible Shipping instances from the database
+        $instances = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT instance_id FROM {$wpdb->prefix}woocommerce_shipping_zone_methods 
+                 WHERE method_id = 'flexible_shipping_single' AND is_enabled = 1",
+                []
+            ),
+            ARRAY_A
+        );
+
+        if ($instances) {
+            foreach ($instances as $instance) {
+                $instance_id = $instance['instance_id'];
+                $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
+                if (isset($settings['title'])) {
+                    $method_id = "flexible_shipping_{$instance_id}";
+                    // Create a custom shipping method instance with public properties
+                    $methods[$method_id] = new class($instance_id, $settings['title']) extends WC_Shipping_Method {
+                        public $instance_id;
+                        public $method_title;
+
+                        public function __construct($instance_id, $title) {
+                            $this->id = "flexible_shipping_{$instance_id}";
+                            $this->instance_id = $instance_id;
+                            $this->method_title = $title;
+                            $this->title = $title;
+                        }
+
+                        public function init() {
+                            // Minimal initialization for admin dropdown
+                        }
+
+                        public function is_available($package) {
+                            return true; // Allow selection in admin regardless of package
+                        }
+                    };
+                }
+            }
+        }
+
+        return $methods;
+    }
+
+    /**
      * Saves the Sales Rep field during order update.
      *
      * @param int $post_id The order ID.
@@ -97,6 +155,32 @@ class Admin_Order {
         if ($new_value !== $current_value) {
             $order->update_meta_data('_sales_rep', $new_value); // Use CRUD method for HPOS
             $order->save(); // Persist to HPOS tables
+        }
+    }
+
+    /**
+     * Updates the "Shipping name" field for Flexible Shipping methods after saving.
+     *
+     * @param int $order_id The order ID.
+     * @param array $items The order items.
+     */
+    public function update_shipping_name($order_id, $items) {
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            return;
+        }
+
+        $shipping_items = $order->get_items('shipping');
+        foreach ($shipping_items as $item_id => $item) {
+            $method_id = $item->get_method_id();
+            if (strpos($method_id, 'flexible_shipping_') === 0) {
+                $instance_id = str_replace('flexible_shipping_', '', $method_id);
+                $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
+                if (isset($settings['title'])) {
+                    $item->set_name($settings['title']);
+                    $item->save();
+                }
+            }
         }
     }
 
