@@ -160,12 +160,49 @@ class Admin_Order {
                 foreach ($fields as $field) {
                     $field_id = $field['id'];
                     $meta_key = '_wapf_' . $field_id;
-                    // Clear existing addon meta
+                    $display_key = sanitize_text_field($field['label']); // Use field label as meta key
+                    // Clear existing meta
                     $item->delete_meta_data($meta_key);
+                    $item->delete_meta_data($display_key);
                     // Save new selection
-                    if (isset($addons[$field_id]) && !empty($addons[$field_id])) {
+                    if (isset($addons[$field_id]) && $addons[$field_id] !== '') {
                         $value = is_array($addons[$field_id]) ? array_map('sanitize_text_field', $addons[$field_id]) : sanitize_text_field($addons[$field_id]);
-                        $item->update_meta_data($meta_key, $value);
+                        $item->update_meta_data($meta_key, $value); // Internal APF meta for pricing
+                        // Build formatted display value
+                        $formatted = [];
+                        if ($field['type'] === 'select' || $field['type'] === 'radio') {
+                            foreach ($field['options']['choices'] as $option) {
+                                if ($option['slug'] === $value) {
+                                    $sel = $option['label'];
+                                    if (!empty($option['pricing_amount'])) {
+                                        $sel .= ' (+$' . number_format($option['pricing_amount'], 2) . ')';
+                                    }
+                                    $formatted[] = $sel;
+                                    break;
+                                }
+                            }
+                        } elseif ($field['type'] === 'checkbox' || $field['type'] === 'checkboxes') {
+                            if ($field['type'] === 'checkbox' && $value === '1') {
+                                $sel = $field['label'];
+                                if (!empty($field['pricing']['amount'])) {
+                                    $sel .= ' (+$' . number_format($field['pricing']['amount'], 2) . ')';
+                                }
+                                $formatted[] = $sel;
+                            } elseif ($field['type'] === 'checkboxes' && is_array($value)) {
+                                foreach ($field['options']['choices'] as $option) {
+                                    if (in_array($option['slug'], $value)) {
+                                        $sel = $option['label'];
+                                        if (!empty($option['pricing_amount'])) {
+                                            $sel .= ' (+$' . number_format($option['pricing_amount'], 2) . ')';
+                                        }
+                                        $formatted[] = $sel;
+                                    }
+                                }
+                            }
+                        }
+                        if (!empty($formatted)) {
+                            $item->update_meta_data($display_key, implode(', ', $formatted));
+                        }
                     }
                 }
                 $item->save();
@@ -307,7 +344,7 @@ class Admin_Order {
         return $contents;
     }
     /**
-     * Adds the "Addons" column header to the order items table (hidden, used as placeholder).
+     * Adds the "Addons" column header to the order items table (will be hidden via CSS).
      */
     public function add_addons_column_header(): void {
         ?>
