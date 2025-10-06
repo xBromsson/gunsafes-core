@@ -157,17 +157,33 @@ class Admin_Order {
                     continue;
                 }
                 $fields = $this->get_apf_fields_for_product($product);
+
+                // Calculate previous addon cost from existing display metas
+                $previous_addon_cost = 0.0;
+                foreach ($fields as $field) {
+                    $display_key = sanitize_text_field($field['label']);
+                    $saved_formatted = $item->get_meta($display_key, true);
+                    if ($saved_formatted) {
+                        $parsed_value = $this->parse_formatted_to_value($saved_formatted, $field);
+                        $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
+                    }
+                }
+
+                // Process new addons
+                $addon_cost = 0.0;
                 foreach ($fields as $field) {
                     $field_id = $field['id'];
                     $meta_key = '_wapf_' . $field_id;
                     $display_key = sanitize_text_field($field['label']); // Use field label as meta key
+
                     // Clear existing meta
                     $item->delete_meta_data($meta_key);
                     $item->delete_meta_data($display_key);
+
                     // Save new selection
                     if (isset($addons[$field_id]) && $addons[$field_id] !== '') {
                         $value = is_array($addons[$field_id]) ? array_map('sanitize_text_field', $addons[$field_id]) : sanitize_text_field($addons[$field_id]);
-                        $item->update_meta_data($meta_key, $value); // Internal APF meta for pricing
+
                         // Build formatted display value
                         $formatted = [];
                         if ($field['type'] === 'select' || $field['type'] === 'radio') {
@@ -203,8 +219,22 @@ class Admin_Order {
                         if (!empty($formatted)) {
                             $item->update_meta_data($display_key, implode(', ', $formatted));
                         }
+
+                        // Add to new addon cost
+                        $addon_cost += $this->get_addon_cost_from_value($value, $field);
                     }
                 }
+
+                // Adjust item prices based on addon cost difference
+                $quantity = $item->get_quantity();
+                $previous_addon_total = $previous_addon_cost * $quantity;
+                $new_addon_total = $addon_cost * $quantity;
+                $delta = $new_addon_total - $previous_addon_total;
+                if ($delta != 0) {
+                    $item->set_subtotal($item->get_subtotal() + $delta);
+                    $item->set_total($item->get_total() + $delta);
+                }
+
                 $item->save();
             }
             $order->calculate_totals(); // Recalculate to include addon costs
@@ -374,8 +404,9 @@ class Admin_Order {
                 <div class="addon-field">
                     <?php
                     $field_id = $field['id'];
-                    $meta_key = '_wapf_' . $field_id;
-                    $saved_value = $item->get_meta($meta_key, true);
+                    $display_key = sanitize_text_field($field['label']);
+                    $saved_formatted = $item->get_meta($display_key, true);
+                    $saved_value = $saved_formatted ? $this->parse_formatted_to_value($saved_formatted, $field) : '';
                     $required = !empty($field['required']) ? ' <span class="required">*</span>' : '';
                     ?>
                     <label><?php echo esc_html($field['label']) . $required; ?></label>
@@ -428,6 +459,94 @@ class Admin_Order {
             <?php endforeach; ?>
         </td>
         <?php
+    }
+    /**
+     * Parses the formatted display value back to the raw value (slug or array of slugs).
+     *
+     * @param string $formatted The formatted string saved in meta.
+     * @param array $field The field configuration.
+     * @return mixed The parsed raw value (string, array, or '1' for single checkbox).
+     */
+    private function parse_formatted_to_value($formatted, $field): mixed {
+        // Split by comma for multi-values
+        $parts = explode(', ', $formatted);
+        $clean_parts = [];
+        foreach ($parts as $part) {
+            // Remove the (+$xx.xx) part
+            $part = preg_replace('/ \(([^)]+)\)$/', '', $part);
+            $clean_parts[] = trim($part);
+        }
+
+        $type = $field['type'];
+        if ($type === 'select' || $type === 'radio') {
+            if (count($clean_parts) !== 1) {
+                return '';
+            }
+            $clean = $clean_parts[0];
+            foreach ($field['options']['choices'] as $option) {
+                if ($option['label'] === $clean) {
+                    return $option['slug'];
+                }
+            }
+            return '';
+        } elseif ($type === 'checkbox') {
+            if (count($clean_parts) !== 1) {
+                return '';
+            }
+            $clean = $clean_parts[0];
+            if ($clean === $field['label']) {
+                return '1';
+            }
+            return '';
+        } elseif ($type === 'checkboxes') {
+            $selected = [];
+            foreach ($clean_parts as $clean) {
+                foreach ($field['options']['choices'] as $option) {
+                    if ($option['label'] === $clean) {
+                        $selected[] = $option['slug'];
+                        break;
+                    }
+                }
+            }
+            return $selected;
+        }
+        return '';
+    }
+    /**
+     * Calculates the addon cost based on the raw value and field configuration.
+     *
+     * @param mixed $value The raw value (string, array, or '1').
+     * @param array $field The field configuration.
+     * @return float The calculated cost.
+     */
+    private function get_addon_cost_from_value($value, $field): float {
+        $cost = 0.0;
+        $type = $field['type'];
+        if ($type === 'select' || $type === 'radio') {
+            if (!is_string($value)) {
+                return $cost;
+            }
+            foreach ($field['options']['choices'] as $option) {
+                if ($option['slug'] === $value) {
+                    $cost += (float) ($option['pricing_amount'] ?? 0);
+                    break;
+                }
+            }
+        } elseif ($type === 'checkbox') {
+            if ($value === '1') {
+                $cost += (float) ($field['pricing']['amount'] ?? 0);
+            }
+        } elseif ($type === 'checkboxes') {
+            if (!is_array($value)) {
+                $value = [];
+            }
+            foreach ($field['options']['choices'] as $option) {
+                if (in_array($option['slug'], $value)) {
+                    $cost += (float) ($option['pricing_amount'] ?? 0);
+                }
+            }
+        }
+        return $cost;
     }
     /**
      * Fetches APF fields for a given product or variation.
