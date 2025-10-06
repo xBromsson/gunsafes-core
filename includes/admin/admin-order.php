@@ -445,20 +445,21 @@ class Admin_Order {
             return;
         }
         $instance_id = (int) str_replace('flexible_shipping_', '', $method_id);
+        $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
+        if (!isset($settings['title'])) {
+            return;
+        }
         // Check for manual override in POST data or existing item cost
         $manual_cost = null;
-        if (!empty($items) && isset($items[$item->get_id()]['order_item_total'])) {
-            $manual_cost = floatval($items[$item->get_id()]['order_item_total']);
+        if (!empty($items) && isset($items[$item->get_id()]['cost'])) {
+            $manual_cost = wc_format_decimal($items[$item->get_id()]['cost']);
         } elseif ($item->get_total() > 0) {
             $manual_cost = $item->get_total();
         }
-        // Skip recalculation if a manual cost is set
-        if ($manual_cost !== null && $manual_cost >= 0) {
-            $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
-            if (isset($settings['title'])) {
-                $item->set_name($settings['title']);
-                $item->save();
-            }
+        // If manual cost is set and positive, update name and skip recalculation
+        if ($manual_cost !== null && $manual_cost > 0) {
+            $item->set_name($settings['title']);
+            $item->save();
             return;
         }
         // Get the real Flexible Shipping method instance
@@ -469,7 +470,11 @@ class Admin_Order {
         // Build package from order data (mimics cart package for shipping calculation)
         $contents = $this->get_order_contents($order);
         if (empty($contents)) {
-            return; // No shippable items; leave cost as 0
+            $item->set_name($settings['title']);
+            $item->set_total(0);
+            $item->set_taxes(['total' => []]);
+            $item->save();
+            return; // No shippable items; set cost to 0 and default name
         }
         $package = [
             'contents' => $contents,
@@ -489,15 +494,20 @@ class Admin_Order {
         $shipping_method->calculate_shipping($package);
         // Get rates (Flexible Shipping typically adds one rate)
         $rates = $shipping_method->rates;
-        if (empty($rates)) {
-            return; // No rate available; leave as 0
+        if (!empty($rates)) {
+            $rate = reset($rates); // Use the first rate
+            // Update the shipping item
+            $item->set_total((float) $rate->cost);
+            $item->set_taxes(['total' => $rate->taxes]);
+            $item->set_name($rate->label);
+            $item->save();
+        } else {
+            // No rate available; set to default name and 0 cost
+            $item->set_name($settings['title']);
+            $item->set_total(0);
+            $item->set_taxes(['total' => []]);
+            $item->save();
         }
-        $rate = reset($rates); // Use the first rate
-        // Update the shipping item
-        $item->set_total((float) $rate->cost);
-        $item->set_taxes(['total' => $rate->taxes]);
-        $item->set_name($rate->label);
-        $item->save();
     }
     /**
      * Builds the order contents array for reuse in shipping and addon calculations.
