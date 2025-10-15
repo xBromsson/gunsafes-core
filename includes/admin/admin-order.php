@@ -125,7 +125,7 @@ class Admin_Order {
         // Placeholder for custom buttons
     }
     /**
-     * Adds each Flexible Shipping instance as a separate shipping method for the "Add shipping" dropdown.
+     * Adds each Flexible Shipping instance as a separate shipping method for the "Add shipping" dropdown, but only if available for the current order.
      *
      * @param array $methods Existing shipping methods.
      * @return array Modified shipping methods.
@@ -140,30 +140,69 @@ class Admin_Order {
             ),
             ARRAY_A
         );
-        if ($instances) {
-            foreach ($instances as $instance) {
-                $instance_id = $instance['instance_id'];
-                $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
-                if (isset($settings['title'])) {
-                    $method_id = "flexible_shipping_{$instance_id}";
-                    // Create a custom shipping method instance with public properties
-                    $methods[$method_id] = new class($instance_id, $settings['title']) extends WC_Shipping_Method {
-                        public $instance_id;
-                        public $method_title;
-                        public function __construct($instance_id, $title) {
-                            $this->id = "flexible_shipping_{$instance_id}";
-                            $this->instance_id = $instance_id;
-                            $this->method_title = $title;
-                            $this->title = $title;
+        if (!$instances) {
+            return $methods;
+        }
+        $available_instances = $instances; // Default to all if not on order edit page
+        // Check if on order edit screen with existing order
+        $screen = get_current_screen();
+        if (is_admin() && $screen && $screen->id === 'shop_order' && isset($_GET['post'])) {
+            $order_id = absint($_GET['post']);
+            $order = wc_get_order($order_id);
+            if ($order) {
+                $contents = $this->get_order_contents($order);
+                if (!empty($contents)) {
+                    $package = [
+                        'contents' => $contents,
+                        'contents_cost' => array_sum(wp_list_pluck($contents, 'line_total')),
+                        'applied_coupons' => $order->get_coupon_codes(),
+                        'user' => ['ID' => $order->get_user_id()],
+                        'destination' => [
+                            'country' => $order->get_shipping_country(),
+                            'state' => $order->get_shipping_state(),
+                            'postcode' => $order->get_shipping_postcode(),
+                            'city' => $order->get_shipping_city(),
+                            'address' => $order->get_shipping_address_1(),
+                            'address_2' => $order->get_shipping_address_2(),
+                        ],
+                    ];
+                    $available_instances = [];
+                    foreach ($instances as $instance) {
+                        $instance_id = $instance['instance_id'];
+                        $shipping_method = WC_Shipping_Zones::get_shipping_method($instance_id);
+                        if ($shipping_method && $shipping_method->id === 'flexible_shipping_single') {
+                            $shipping_method->calculate_shipping($package);
+                            if (!empty($shipping_method->rates)) {
+                                $available_instances[] = $instance;
+                            }
                         }
-                        public function init() {
-                            // Minimal initialization for admin dropdown
-                        }
-                        public function is_available($package) {
-                            return true; // Allow selection in admin regardless of package
-                        }
-                    };
+                    }
                 }
+            }
+        }
+        // Add available instances as custom methods
+        foreach ($available_instances as $instance) {
+            $instance_id = $instance['instance_id'];
+            $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
+            if (isset($settings['title'])) {
+                $method_id = "flexible_shipping_{$instance_id}";
+                // Create a custom shipping method instance with public properties
+                $methods[$method_id] = new class($instance_id, $settings['title']) extends WC_Shipping_Method {
+                    public $instance_id;
+                    public $method_title;
+                    public function __construct($instance_id, $title) {
+                        $this->id = "flexible_shipping_{$instance_id}";
+                        $this->instance_id = $instance_id;
+                        $this->method_title = $title;
+                        $this->title = $title;
+                    }
+                    public function init() {
+                        // Minimal initialization for admin dropdown
+                    }
+                    public function is_available($package) {
+                        return true; // Allow selection in admin regardless of package
+                    }
+                };
             }
         }
         return $methods;
@@ -411,8 +450,9 @@ class Admin_Order {
         }
         $shipping_items = $order->get_items('shipping');
         foreach ($shipping_items as $item_id => $item) {
-            $this->calculate_and_update_shipping_item($item, $order, $items);
+            $this->calculate_and_update_shipping_item($item, $order);
         }
+        // Recalculate order totals after updates
         $order->calculate_totals();
     }
     /**
@@ -437,9 +477,8 @@ class Admin_Order {
      *
      * @param WC_Order_Item_Shipping $item The shipping order item.
      * @param WC_Order $order The order object.
-     * @param array $items Optional order items from save action for checking manual cost.
      */
-    private function calculate_and_update_shipping_item(WC_Order_Item_Shipping $item, WC_Order $order, $items = []): void {
+    private function calculate_and_update_shipping_item(WC_Order_Item_Shipping $item, WC_Order $order): void {
         $method_id = $item->get_method_id();
         if (strpos($method_id, 'flexible_shipping_') !== 0) {
             return;
@@ -449,25 +488,12 @@ class Admin_Order {
         if (!isset($settings['title'])) {
             return;
         }
-        // Check for manual override in POST data or existing item cost
-        $manual_cost = null;
-        if (!empty($items) && isset($items[$item->get_id()]['cost'])) {
-            $manual_cost = wc_format_decimal($items[$item->get_id()]['cost']);
-        } elseif ($item->get_total() > 0) {
-            $manual_cost = $item->get_total();
-        }
-        // If manual cost is set and positive, update name and skip recalculation
-        if ($manual_cost !== null && $manual_cost > 0) {
-            $item->set_name($settings['title']);
-            $item->save();
-            return;
-        }
         // Get the real Flexible Shipping method instance
         $shipping_method = WC_Shipping_Zones::get_shipping_method($instance_id);
         if (!$shipping_method || $shipping_method->id !== 'flexible_shipping_single') {
             return;
         }
-        // Build package from order data (mimics cart package for shipping calculation)
+        // Build package from order data
         $contents = $this->get_order_contents($order);
         if (empty($contents)) {
             $item->set_name($settings['title']);
