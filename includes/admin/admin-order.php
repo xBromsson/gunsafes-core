@@ -473,7 +473,7 @@ class Admin_Order {
         $this->calculate_and_update_shipping_item($item, $order);
     }
     /**
-     * Calculates and updates shipping cost for a Flexible Shipping item based on order contents.
+     * Calculates and updates shipping cost for a Flexible Shipping item based on order contents, allowing manual overrides.
      *
      * @param WC_Order_Item_Shipping $item The shipping order item.
      * @param WC_Order $order The order object.
@@ -496,44 +496,61 @@ class Admin_Order {
         // Build package from order data
         $contents = $this->get_order_contents($order);
         if (empty($contents)) {
-            $item->set_name($settings['title']);
-            $item->set_total(0);
-            $item->set_taxes(['total' => []]);
-            $item->save();
-            return; // No shippable items; set cost to 0 and default name
-        }
-        $package = [
-            'contents' => $contents,
-            'contents_cost' => array_sum(wp_list_pluck($contents, 'line_total')),
-            'applied_coupons' => $order->get_coupon_codes(),
-            'user' => ['ID' => $order->get_user_id()],
-            'destination' => [
-                'country' => $order->get_shipping_country(),
-                'state' => $order->get_shipping_state(),
-                'postcode' => $order->get_shipping_postcode(),
-                'city' => $order->get_shipping_city(),
-                'address' => $order->get_shipping_address_1(),
-                'address_2' => $order->get_shipping_address_2(),
-            ],
-        ];
-        // Run calculation
-        $shipping_method->calculate_shipping($package);
-        // Get rates (Flexible Shipping typically adds one rate)
-        $rates = $shipping_method->rates;
-        if (!empty($rates)) {
-            $rate = reset($rates); // Use the first rate
-            // Update the shipping item
-            $item->set_total((float) $rate->cost);
-            $item->set_taxes(['total' => $rate->taxes]);
-            $item->set_name($rate->label);
-            $item->save();
+            $calculated_cost = 0.0;
+            $calculated_taxes = ['total' => []];
+            $label = $settings['title'];
         } else {
-            // No rate available; set to default name and 0 cost
-            $item->set_name($settings['title']);
-            $item->set_total(0);
-            $item->set_taxes(['total' => []]);
-            $item->save();
+            $package = [
+                'contents' => $contents,
+                'contents_cost' => array_sum(wp_list_pluck($contents, 'line_total')),
+                'applied_coupons' => $order->get_coupon_codes(),
+                'user' => ['ID' => $order->get_user_id()],
+                'destination' => [
+                    'country' => $order->get_shipping_country(),
+                    'state' => $order->get_shipping_state(),
+                    'postcode' => $order->get_shipping_postcode(),
+                    'city' => $order->get_shipping_city(),
+                    'address' => $order->get_shipping_address_1(),
+                    'address_2' => $order->get_shipping_address_2(),
+                ],
+            ];
+            // Run calculation
+            $shipping_method->calculate_shipping($package);
+            // Get rates (Flexible Shipping typically adds one rate)
+            $rates = $shipping_method->rates;
+            $calculated_cost = 0.0;
+            $calculated_taxes = ['total' => []];
+            $label = $settings['title'];
+            if (!empty($rates)) {
+                $rate = reset($rates); // Use the first rate
+                $calculated_cost = (float) $rate->cost;
+                $calculated_taxes = ['total' => $rate->taxes];
+                $label = $rate->label;
+            }
         }
+        // Get last calculated cost from meta
+        $last_calculated = (float) $item->get_meta('_last_calculated_cost', true);
+        // Get current total (after any POST updates)
+        $current_total = (float) $item->get_total();
+        if (abs($current_total - $last_calculated) < 0.01) {
+            // Not manual override: update to new calculated
+            $item->set_total($calculated_cost);
+            $item->set_taxes($calculated_taxes);
+            $item->update_meta_data('_last_calculated_cost', $calculated_cost);
+        } else {
+            // Manual override: keep current total, recalculate taxes
+            if ($shipping_method->tax_status === 'taxable') {
+                $tax_rates = WC_Tax::get_shipping_tax_rates();
+                $taxes = WC_Tax::calc_tax($current_total, $tax_rates, false);
+                $item->set_taxes(['total' => $taxes]);
+            } else {
+                $item->set_taxes(['total' => []]);
+            }
+            // Do not update _last_calculated_cost to maintain manual flag
+        }
+        // Update name to (possibly new) label
+        $item->set_name($label);
+        $item->save();
     }
     /**
      * Builds the order contents array for reuse in shipping and addon calculations.
