@@ -7,7 +7,7 @@ if (!class_exists('WooCommerce')) {
     return; // Exit if WooCommerce is not active
 }
 /**
- * Handles custom admin order screen functionality, including Sales Rep field, Flexible Shipping methods, and APF addons.
+ * Handles custom admin order screen functionality, including Sales Rep field, Flexible Shipping methods, APF addons, and Quote status.
  */
 class Admin_Order {
     public function __construct() {
@@ -42,6 +42,11 @@ class Admin_Order {
         add_action('woocommerce_admin_order_item_values', [$this, 'display_addons_column'], 10, 3);
         // Enqueue assets for the order screen
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
+        // Prevent stock reduction and emails for quote status
+        add_filter('woocommerce_order_item_quantity', [$this, 'prevent_stock_reduction_for_quote'], 10, 3);
+        add_filter('woocommerce_email_enabled_customer_completed_order', [$this, 'disable_emails_for_quote'], 10, 2);
+        add_filter('woocommerce_email_enabled_new_order', [$this, 'disable_emails_for_quote'], 10, 2);
+        add_filter('woocommerce_email_enabled_customer_processing_order', [$this, 'disable_emails_for_quote'], 10, 2);
     }
     /**
      * Adds the Sales Rep dropdown field to the order edit screen.
@@ -796,6 +801,33 @@ class Admin_Order {
             }
         }
         return $fields;
+    }
+    /**
+     * Prevents stock reduction for orders with 'quote' status.
+     *
+     * @param int $qty The quantity to reduce stock by.
+     * @param WC_Order $order The order object.
+     * @param WC_Order_Item $item The order item object.
+     * @return int The modified quantity (0 for quote status).
+     */
+    public function prevent_stock_reduction_for_quote($qty, $order, $item): int {
+        if ($order->get_status() === 'quote') {
+            return 0;
+        }
+        return $qty;
+    }
+    /**
+     * Disables specific email notifications for orders with 'quote' status.
+     *
+     * @param bool $enabled Whether the email is enabled.
+     * @param WC_Order $order The order object.
+     * @return bool Modified enabled status.
+     */
+    public function disable_emails_for_quote($enabled, $order): bool {
+        if ($order && $order->get_status() === 'quote') {
+            return false;
+        }
+        return $enabled;
     }
     /**
      * Enqueues styles and scripts specific to the order screen.
