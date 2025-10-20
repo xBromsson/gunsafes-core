@@ -257,6 +257,12 @@ class Admin_Order {
                 $saved_formatted = $item->get_meta($display_key, true);
                 if ($saved_formatted) {
                     $parsed_value = $this->parse_formatted_to_value($saved_formatted, $field);
+                    // Adjust for checkboxes
+                    if ($field['type'] === 'checkboxes' && !empty($parsed_value)) {
+                        $parsed_value = explode(',', $parsed_value);
+                    } else {
+                        $parsed_value = (array) $parsed_value;
+                    }
                     $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
                 }
             }
@@ -375,6 +381,12 @@ class Admin_Order {
             $saved_formatted = $item->get_meta($display_key, true);
             if ($saved_formatted) {
                 $parsed_value = $this->parse_formatted_to_value($saved_formatted, $field);
+                // Adjust for checkboxes
+                if ($field['type'] === 'checkboxes' && !empty($parsed_value)) {
+                    $parsed_value = explode(',', $parsed_value);
+                } else {
+                    $parsed_value = (array) $parsed_value;
+                }
                 $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
             }
         }
@@ -623,12 +635,15 @@ class Admin_Order {
                 <label><?php echo esc_html($field['label']) . $required; ?></label>
                 <?php if ($field['type'] === 'checkbox' || $field['type'] === 'checkboxes') : ?>
                     <div class="addon-checkbox-group">
-                        <?php foreach ($field['options']['choices'] as $option) : ?>
+                        <?php
+                        // For checkboxes, split saved_value if it's a comma-separated string
+                        $saved_values = ($field['type'] === 'checkboxes' && !empty($saved_value)) ? explode(',', $saved_value) : ($saved_value ? [$saved_value] : []);
+                        foreach ($field['options']['choices'] as $option) : ?>
                             <label style="display: block; margin-bottom: 5px;">
                                 <input type="checkbox"
                                        name="order_item_addons[<?php echo esc_attr($item_id); ?>][<?php echo esc_attr($field_id); ?>][]"
                                        value="<?php echo esc_attr($option['slug']); ?>"
-                                       <?php if (is_array($saved_value) && in_array($option['slug'], $saved_value)) echo 'checked'; ?> />
+                                       <?php if (in_array($option['slug'], $saved_values)) echo 'checked'; ?> />
                                 <?php echo esc_html($option['label']); ?>
                                 <?php if (!empty($option['pricing_amount'])) : ?>
                                     (+<?php echo wc_price($option['pricing_amount']); ?>)
@@ -672,13 +687,17 @@ class Admin_Order {
         echo '</td>';
     }
     /**
-     * Parses the formatted display value back to the raw value (slug or array of slugs).
+     * Parses the formatted display value back to the raw value (slug or comma-separated slugs).
      *
      * @param string $formatted The formatted string saved in meta.
      * @param array $field The field configuration.
-     * @return mixed The parsed raw value (string, array, or '1' for single checkbox).
+     * @return string The parsed raw value (string, comma-separated for checkboxes).
      */
-    private function parse_formatted_to_value($formatted, $field): mixed {
+    private function parse_formatted_to_value($formatted, $field): string {
+        // Handle empty or invalid input
+        if (empty($formatted) || !is_string($formatted)) {
+            return '';
+        }
         // Split by comma for multi-values
         $parts = explode(', ', $formatted);
         $clean_parts = [];
@@ -718,7 +737,8 @@ class Admin_Order {
                     }
                 }
             }
-            return $selected;
+            // Return comma-separated slugs for multiple selections
+            return implode(',', $selected);
         }
         return '';
     }
@@ -747,11 +767,10 @@ class Admin_Order {
                 $cost += (float) ($field['pricing']['amount'] ?? 0);
             }
         } elseif ($type === 'checkboxes') {
-            if (!is_array($value)) {
-                $value = [];
-            }
+            // Handle both array and comma-separated string
+            $values = is_array($value) ? $value : (empty($value) ? [] : explode(',', $value));
             foreach ($field['options']['choices'] as $option) {
-                if (in_array($option['slug'], $value)) {
+                if (in_array($option['slug'], $values)) {
                     $cost += (float) ($option['pricing_amount'] ?? 0);
                 }
             }
