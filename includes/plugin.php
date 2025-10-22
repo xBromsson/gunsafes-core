@@ -3,6 +3,7 @@
 if (!defined('ABSPATH')) exit;
 
 require __DIR__ . '/admin/admin-order.php';
+require __DIR__ . '/call-for-pricing.php';
 
 class Plugin
 {
