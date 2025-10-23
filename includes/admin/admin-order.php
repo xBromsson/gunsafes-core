@@ -7,7 +7,7 @@ if (!class_exists('WooCommerce')) {
     return; // Exit if WooCommerce is not active
 }
 /**
- * Handles custom admin order screen functionality, including Sales Rep field, Flexible Shipping methods, APF addons, and Quote status.
+ * Handles custom admin order screen functionality, including Sales Rep field, Flexible Shipping methods, APF addons, Quote status, and regional shipping markups.
  */
 class Admin_Order {
     public function __construct() {
@@ -47,6 +47,48 @@ class Admin_Order {
         add_filter('woocommerce_email_enabled_customer_completed_order', [$this, 'disable_emails_for_quote'], 10, 2);
         add_filter('woocommerce_email_enabled_new_order', [$this, 'disable_emails_for_quote'], 10, 2);
         add_filter('woocommerce_email_enabled_customer_processing_order', [$this, 'disable_emails_for_quote'], 10, 2);
+    }
+    /**
+     * Applies regional shipping markups to a shipping cost based on state or ZIP code.
+     *
+     * @param float $cost The original shipping cost.
+     * @param array $package The shipping package data.
+     * @return float The adjusted shipping cost.
+     */
+    private function apply_regional_shipping_markups($cost, $package): float {
+        // Region markups
+        $region_data = [
+            'ZIP' => [
+                '07876' => 20.0, '05001' => 25.0, '02901' => 25.0,
+                '81120' => 30.0, '81302' => 30.0, '81303' => 30.0, '81301' => 30.0,
+                '80435' => 30.0, '80438' => 30.0, '80442' => 30.0, '80443' => 30.0,
+                '80446' => 30.0, '80447' => 30.0, '80451' => 30.0, '80452' => 30.0,
+                '80459' => 30.0, '80468' => 30.0, '80473' => 30.0, '80478' => 30.0,
+                '80482' => 30.0
+            ],
+            'STATE' => [
+                'NJ' => 20.0, 'NY' => 20.0, 'VT' => 25.0, 'RI' => 25.0, 'CO' => 30.0,
+                'ME' => 25.0, 'NH' => 25.0, 'CT' => 25.0, 'VA' => 25.0, 'ND' => 35.0,
+                'WI' => 65.0, 'WY' => 30.0, 'CA' => 75.0, 'MA' => 40.0, 'MT' => 75.0,
+                'AL' => 30.0, 'MD' => 20.0, 'MI' => 150.0, 'UT' => 100.0, 'IL' => 50.0
+            ]
+        ];
+        // Get shipping location from package
+        $state = $package['destination']['state'] ?? '';
+        $postcode = $package['destination']['postcode'] ?? '';
+        // Determine markup percent
+        $markup_percent = 0;
+        if (isset($region_data['ZIP'][$postcode])) {
+            $markup_percent = $region_data['ZIP'][$postcode];
+        } elseif (isset($region_data['STATE'][$state])) {
+            $markup_percent = $region_data['STATE'][$state];
+        }
+        // Apply markup if applicable
+        if ($markup_percent > 0) {
+            $multiplier = 1 + ($markup_percent / 100);
+            return round($cost * $multiplier, 2);
+        }
+        return $cost;
     }
     /**
      * Adds the Sales Rep dropdown field to the order edit screen.
@@ -230,9 +272,6 @@ class Admin_Order {
                 $addons_post = wp_unslash($items_array['order_item_addons']);
             }
         }
-        if (empty($addons_post)) {
-            return;
-        }
         $order = wc_get_order($order_id);
         if (!$order) {
             return;
@@ -241,23 +280,18 @@ class Admin_Order {
             if ($item->get_type() !== 'line_item') {
                 continue;
             }
-            if (!isset($addons_post[$item_id])) {
-                continue;
-            }
-            $addons = $addons_post[$item_id];
             $product = $item->get_product();
             if (!$product) {
                 continue;
             }
             $fields = $this->get_apf_fields_for_product($product);
-            // Calculate previous addon cost from existing display metas
+            // Calculate previous addon cost and clear existing meta
             $previous_addon_cost = 0.0;
             foreach ($fields as $field) {
                 $display_key = sanitize_text_field($field['label']);
                 $saved_formatted = $item->get_meta($display_key, true);
                 if ($saved_formatted) {
                     $parsed_value = $this->parse_formatted_to_value($saved_formatted, $field);
-                    // Adjust for checkboxes
                     if ($field['type'] === 'checkboxes' && !empty($parsed_value)) {
                         $parsed_value = explode(',', $parsed_value);
                     } else {
@@ -265,28 +299,39 @@ class Admin_Order {
                     }
                     $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
                 }
+                $item->delete_meta_data($display_key); // Clear existing meta
             }
+            // If no addons data for this item, reset price to base product price
+            if (!isset($addons_post[$item_id])) {
+                $quantity = $item->get_quantity();
+                $base_price = (float) $product->get_price();
+                $new_subtotal = $base_price * $quantity;
+                $item->set_subtotal($new_subtotal);
+                $item->set_total($new_subtotal);
+                $item->save();
+                continue;
+            }
+            $addons = $addons_post[$item_id];
             // Process new addons
             $addon_cost = 0.0;
             foreach ($fields as $field) {
                 $field_id = $field['id'];
                 $display_key = sanitize_text_field($field['label']);
-                // Clear existing meta
-                $item->delete_meta_data($display_key);
-                // Save new selection
-                if (isset($addons[$field_id]) && $addons[$field_id] !== '') {
+                // Check if field is set, including empty string for select
+                if (array_key_exists($field_id, $addons)) {
                     $value = is_array($addons[$field_id]) ? array_map('sanitize_text_field', $addons[$field_id]) : sanitize_text_field($addons[$field_id]);
-                    // Build formatted display value
                     $formatted = [];
                     if ($field['type'] === 'select' || $field['type'] === 'radio') {
-                        foreach ($field['options']['choices'] as $option) {
-                            if ($option['slug'] === $value) {
-                                $sel = $option['label'];
-                                if (!empty($option['pricing_amount'])) {
-                                    $sel .= ' (+$' . number_format($option['pricing_amount'], 2) . ')';
+                        if ($value !== '') { // Non-empty value
+                            foreach ($field['options']['choices'] as $option) {
+                                if ($option['slug'] === $value) {
+                                    $sel = $option['label'];
+                                    if (!empty($option['pricing_amount'])) {
+                                        $sel .= ' (+$' . number_format($option['pricing_amount'], 2) . ')';
+                                    }
+                                    $formatted[] = $sel;
+                                    break;
                                 }
-                                $formatted[] = $sel;
-                                break;
                             }
                         }
                     } elseif ($field['type'] === 'checkbox' || $field['type'] === 'checkboxes') {
@@ -311,19 +356,15 @@ class Admin_Order {
                     if (!empty($formatted)) {
                         $item->update_meta_data($display_key, implode(', ', $formatted));
                     }
-                    // Add to new addon cost
                     $addon_cost += $this->get_addon_cost_from_value($value, $field);
                 }
             }
-            // Adjust item prices based on addon cost difference
+            // Reset price to base product price plus new addon cost
             $quantity = $item->get_quantity();
-            $previous_addon_total = $previous_addon_cost * $quantity;
-            $new_addon_total = $addon_cost * $quantity;
-            $delta = $new_addon_total - $previous_addon_total;
-            if ($delta != 0) {
-                $item->set_subtotal($item->get_subtotal() + $delta);
-                $item->set_total($item->get_total() + $delta);
-            }
+            $base_price = (float) $product->get_price();
+            $new_subtotal = ($base_price + $addon_cost) * $quantity;
+            $item->set_subtotal($new_subtotal);
+            $item->set_total($new_subtotal);
             $item->save();
         }
         $order->calculate_totals();
@@ -346,6 +387,27 @@ class Admin_Order {
         $item = $order->get_item($item_id);
         if (!$item || $item->get_type() !== 'line_item') {
             wp_send_json($response);
+        }
+        $product = $item->get_product();
+        if (!$product) {
+            wp_send_json($response);
+        }
+        $fields = $this->get_apf_fields_for_product($product);
+        // Calculate previous addon cost and clear existing meta
+        $previous_addon_cost = 0.0;
+        foreach ($fields as $field) {
+            $display_key = sanitize_text_field($field['label']);
+            $saved_formatted = $item->get_meta($display_key, true);
+            if ($saved_formatted) {
+                $parsed_value = $this->parse_formatted_to_value($saved_formatted, $field);
+                if ($field['type'] === 'checkboxes' && !empty($parsed_value)) {
+                    $parsed_value = explode(',', $parsed_value);
+                } else {
+                    $parsed_value = (array) $parsed_value;
+                }
+                $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
+            }
+            $item->delete_meta_data($display_key); // Clear existing meta
         }
         $addons = [];
         if (isset($_POST['order_item_addons']) && is_array($_POST['order_item_addons'])) {
@@ -370,43 +432,45 @@ class Admin_Order {
                 }
             }
         }
-        $product = $item->get_product();
-        if (!$product) {
+        // If no addons data, reset price to base product price
+        if (empty($addons)) {
+            $quantity = $item->get_quantity();
+            $base_price = (float) $product->get_price();
+            $new_subtotal = $base_price * $quantity;
+            $item->set_subtotal($new_subtotal);
+            $item->set_total($new_subtotal);
+            $item->calculate_taxes();
+            $item->save();
+            $order->calculate_totals();
+            ob_start();
+            wc_get_template('admin/meta-boxes/views/html-order-item-taxes.php', ['item' => $item]);
+            $html = ob_get_clean();
+            $response['success'] = true;
+            $response['html'] = $html;
+            $response['subtotal'] = html_entity_decode(wc_price($item->get_subtotal()), ENT_QUOTES, 'UTF-8');
+            $response['total'] = html_entity_decode(wc_price($item->get_total()), ENT_QUOTES, 'UTF-8');
             wp_send_json($response);
         }
-        $fields = $this->get_apf_fields_for_product($product);
-        $previous_addon_cost = 0.0;
-        foreach ($fields as $field) {
-            $display_key = sanitize_text_field($field['label']);
-            $saved_formatted = $item->get_meta($display_key, true);
-            if ($saved_formatted) {
-                $parsed_value = $this->parse_formatted_to_value($saved_formatted, $field);
-                // Adjust for checkboxes
-                if ($field['type'] === 'checkboxes' && !empty($parsed_value)) {
-                    $parsed_value = explode(',', $parsed_value);
-                } else {
-                    $parsed_value = (array) $parsed_value;
-                }
-                $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
-            }
-        }
+        // Process new addons
         $addon_cost = 0.0;
         foreach ($fields as $field) {
             $field_id = $field['id'];
             $display_key = sanitize_text_field($field['label']);
-            $item->delete_meta_data($display_key);
-            if (isset($addons[$field_id]) && $addons[$field_id] !== '') {
+            // Check if field is set, including empty string for select
+            if (array_key_exists($field_id, $addons)) {
                 $value = is_array($addons[$field_id]) ? $addons[$field_id] : $addons[$field_id];
                 $formatted = [];
                 if ($field['type'] === 'select' || $field['type'] === 'radio') {
-                    foreach ($field['options']['choices'] as $option) {
-                        if ($option['slug'] === $value) {
-                            $sel = $option['label'];
-                            if (!empty($option['pricing_amount'])) {
-                                $sel .= ' (+$' . number_format($option['pricing_amount'], 2) . ')';
+                    if ($value !== '') { // Non-empty value
+                        foreach ($field['options']['choices'] as $option) {
+                            if ($option['slug'] === $value) {
+                                $sel = $option['label'];
+                                if (!empty($option['pricing_amount'])) {
+                                    $sel .= ' (+$' . number_format($option['pricing_amount'], 2) . ')';
+                                }
+                                $formatted[] = $sel;
+                                break;
                             }
-                            $formatted[] = $sel;
-                            break;
                         }
                     }
                 } elseif ($field['type'] === 'checkbox' || $field['type'] === 'checkboxes') {
@@ -434,14 +498,12 @@ class Admin_Order {
                 $addon_cost += $this->get_addon_cost_from_value($value, $field);
             }
         }
+        // Reset price to base product price plus new addon cost
         $quantity = $item->get_quantity();
-        $previous_addon_total = $previous_addon_cost * $quantity;
-        $new_addon_total = $addon_cost * $quantity;
-        $delta = $new_addon_total - $previous_addon_total;
-        if ($delta != 0) {
-            $item->set_subtotal($item->get_subtotal() + $delta);
-            $item->set_total($item->get_total() + $delta);
-        }
+        $base_price = (float) $product->get_price();
+        $new_subtotal = ($base_price + $addon_cost) * $quantity;
+        $item->set_subtotal($new_subtotal);
+        $item->set_total($new_subtotal);
         $item->calculate_taxes();
         $item->save();
         $order->calculate_totals();
@@ -490,7 +552,7 @@ class Admin_Order {
         $this->calculate_and_update_shipping_item($item, $order);
     }
     /**
-     * Calculates and updates shipping cost for a Flexible Shipping item based on order contents, allowing manual overrides.
+     * Calculates and updates shipping cost for a Flexible Shipping item based on order contents, allowing manual overrides and applying regional markups.
      *
      * @param WC_Order_Item_Shipping $item The shipping order item.
      * @param WC_Order $order The order object.
@@ -543,6 +605,15 @@ class Admin_Order {
                 $calculated_cost = (float) $rate->cost;
                 $calculated_taxes = ['total' => $rate->taxes];
                 $label = $rate->label;
+            }
+            // Apply regional shipping markups
+            $calculated_cost = $this->apply_regional_shipping_markups($calculated_cost, $package);
+            // Recalculate taxes based on adjusted cost
+            if ($shipping_method->tax_status === 'taxable') {
+                $tax_rates = WC_Tax::get_shipping_tax_rates();
+                $calculated_taxes = ['total' => WC_Tax::calc_tax($calculated_cost, $tax_rates, false)];
+            } else {
+                $calculated_taxes = ['total' => []];
             }
         }
         // Get last calculated cost from meta

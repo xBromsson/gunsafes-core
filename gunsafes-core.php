@@ -18,7 +18,12 @@ define('GUNSAFES_CORE_VER', '0.1.0');
 require_once __DIR__ . '/includes/call-for-pricing.php';
 require_once __DIR__ . '/includes/admin/admin-order.php';
 
-// Load text domain for translations
+// Load text domain for translations and instantiate classes
 add_action('plugins_loaded', function () {
     load_plugin_textdomain('gunsafes-core', false, dirname(plugin_basename(__FILE__)) . '/languages');
+    
+    // Instantiate Admin_Order class
+    if (class_exists('Admin_Order')) {
+        new Admin_Order();
+    }
 });
