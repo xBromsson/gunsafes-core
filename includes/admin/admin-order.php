@@ -616,26 +616,11 @@ class Admin_Order {
                 $calculated_taxes = ['total' => []];
             }
         }
-        // Get last calculated cost from meta
-        $last_calculated = (float) $item->get_meta('_last_calculated_cost', true);
         // Get current total (after any POST updates)
         $current_total = (float) $item->get_total();
-        if (abs($current_total - $last_calculated) < 0.01) {
-            // Not manual override: update to new calculated
-            $item->set_total($calculated_cost);
-            $item->set_taxes($calculated_taxes);
-            $item->update_meta_data('_last_calculated_cost', $calculated_cost);
-        } else {
-            // Manual override: keep current total, recalculate taxes
-            if ($shipping_method->tax_status === 'taxable') {
-                $tax_rates = WC_Tax::get_shipping_tax_rates();
-                $taxes = WC_Tax::calc_tax($current_total, $tax_rates, false);
-                $item->set_taxes(['total' => $taxes]);
-            } else {
-                $item->set_taxes(['total' => []]);
-            }
-            // Do not update _last_calculated_cost to maintain manual flag
-        }
+        // Always update to new calculated cost and taxes
+        $item->set_total($calculated_cost);
+        $item->set_taxes($calculated_taxes);
         // Update name to (possibly new) label
         $item->set_name($label);
         $item->save();
