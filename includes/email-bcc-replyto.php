@@ -1,7 +1,6 @@
 <?php
 /**
  * Simple BCC + Reply-To for *all* WooCommerce customer emails
- * FIXED: Use correct $email object
  *
  * @package Gunsafes_Core
  */
@@ -13,10 +12,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 /* --------------------------------------------------------------
  * 1. EDIT THESE
  * ------------------------------------------------------------ */
-$bcc_addresses = [
-    'marvinbrown.me@gmail.com',
-    // 'sales@gunsafes.com',
-];
+$bcc_list_raw = get_option( 'gscore_bcc_emails', "marvin@codeblueprint.co\nsales@gunsafes.com" );
+$bcc_addresses = array_filter( array_map( 'trim', explode( "\n", $bcc_list_raw ) ) );
 
 $reply_to_address = 'sales@gunsafes.com';
 
@@ -27,40 +24,25 @@ add_filter(
     'woocommerce_email_headers',
     function ( $headers, $email_id, $order, $email ) use ( $bcc_addresses, $reply_to_address ) {
 
-        error_log( "GScore BCC: Filter fired – email_id = '{$email_id}'" );
-
-        // 1. $email is the WC_Email instance
-        if ( ! is_object( $email ) || ! method_exists( $email, 'is_customer_email' ) ) {
-            error_log( "GScore BCC: No valid WC_Email object – skipping." );
+        // Bail early if we don't have a proper WC_Email object.
+        if ( ! is_object( $email ) || ! method_exists( $email, 'is_customer_email' ) || ! $email->is_customer_email() ) {
             return $headers;
         }
 
-        $is_customer = $email->is_customer_email();
-        error_log( "GScore BCC: is_customer_email = " . ( $is_customer ? 'YES' : 'NO' ) );
-
-        if ( ! $is_customer ) {
-            error_log( "GScore BCC: Not a customer email – skipping." );
-            return $headers;
-        }
-
-        // 2. Add BCCs
+        // Add each BCC (skip duplicates).
         foreach ( $bcc_addresses as $addr ) {
             $addr = trim( $addr );
             if ( $addr && is_email( $addr ) && stripos( $headers, "Bcc: {$addr}" ) === false ) {
                 $headers .= "Bcc: {$addr}\r\n";
-                error_log( "GScore BCC: Added BCC → {$addr}" );
             }
         }
 
-        // 3. Force Reply-To
+        // Force Reply-To (remove any existing one first).
         $headers = preg_replace( '/^Reply-To:.*$/mi', '', $headers );
         $headers .= "Reply-To: {$reply_to_address}\r\n";
-        error_log( "GScore BCC: Added Reply-To → {$reply_to_address}" );
-
-        error_log( "GScore BCC: SUCCESS – BCC applied for '{$email_id}'" );
 
         return $headers;
     },
     999,
-    4  // 4 arguments!
+    4
 );

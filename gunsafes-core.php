@@ -19,6 +19,7 @@ require_once __DIR__ . '/includes/call-for-pricing.php';
 require_once __DIR__ . '/includes/admin/admin-order.php';
 // require_once __DIR__ . '/includes/dropship-notifier.php';
 require_once __DIR__ . '/includes/email-bcc-replyto.php';
+require_once __DIR__ . '/includes/admin-bcc-settings.php';
 
 // Load text domain for translations and instantiate classes
 add_action('plugins_loaded', function () {
@@ -29,3 +30,14 @@ add_action('plugins_loaded', function () {
         new Admin_Order();
     }
 });
+
+// add_action( 'admin_menu', function() {
+//     add_submenu_page(
+//         'woocommerce',                  // Parent = WooCommerce
+//         'BCC Email Settings',
+//         'BCC Emails',
+//         'manage_options',
+//         'gscore-bcc-settings',
+//         'gscore_bcc_settings_page' // will be defined by the class
+//     );
+// } );
