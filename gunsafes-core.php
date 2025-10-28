@@ -17,6 +17,8 @@ define('GUNSAFES_CORE_VER', '0.1.0');
 // Include feature files
 require_once __DIR__ . '/includes/call-for-pricing.php';
 require_once __DIR__ . '/includes/admin/admin-order.php';
+// require_once __DIR__ . '/includes/dropship-notifier.php';
+require_once __DIR__ . '/includes/email-bcc-replyto.php';
 
 // Load text domain for translations and instantiate classes
 add_action('plugins_loaded', function () {
