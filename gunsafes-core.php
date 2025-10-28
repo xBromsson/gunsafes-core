@@ -20,6 +20,7 @@ require_once __DIR__ . '/includes/admin/admin-order.php';
 // require_once __DIR__ . '/includes/dropship-notifier.php';
 require_once __DIR__ . '/includes/email-bcc-replyto.php';
 require_once __DIR__ . '/includes/admin-bcc-settings.php';
+require_once __DIR__ . '/includes/admin-regional-markups.php';
 
 // Load text domain for translations and instantiate classes
 add_action('plugins_loaded', function () {

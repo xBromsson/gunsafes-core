@@ -56,39 +56,59 @@ class Admin_Order {
      * @return float The adjusted shipping cost.
      */
     private function apply_regional_shipping_markups($cost, $package): float {
-        // Region markups
-        $region_data = [
-            'ZIP' => [
-                '07876' => 20.0, '05001' => 25.0, '02901' => 25.0,
-                '81120' => 30.0, '81302' => 30.0, '81303' => 30.0, '81301' => 30.0,
-                '80435' => 30.0, '80438' => 30.0, '80442' => 30.0, '80443' => 30.0,
-                '80446' => 30.0, '80447' => 30.0, '80451' => 30.0, '80452' => 30.0,
-                '80459' => 30.0, '80468' => 30.0, '80473' => 30.0, '80478' => 30.0,
-                '80482' => 30.0
-            ],
-            'STATE' => [
-                'NJ' => 20.0, 'NY' => 20.0, 'VT' => 25.0, 'RI' => 25.0, 'CO' => 30.0,
-                'ME' => 25.0, 'NH' => 25.0, 'CT' => 25.0, 'VA' => 25.0, 'ND' => 35.0,
-                'WI' => 65.0, 'WY' => 30.0, 'CA' => 75.0, 'MA' => 40.0, 'MT' => 75.0,
-                'AL' => 30.0, 'MD' => 20.0, 'MI' => 150.0, 'UT' => 100.0, 'IL' => 50.0
-            ]
-        ];
-        // Get shipping location from package
-        $state = $package['destination']['state'] ?? '';
+        $zip_text   = get_option( 'gscore_regional_markups_zip', '' );
+        $state_text = get_option( 'gscore_regional_markups_state', '' );
+
+        $zip_markups   = $this->text_to_array( $zip_text, $this->get_default_zip() );
+        $state_markups = $this->text_to_array( $state_text, $this->get_default_state() );
+
+        $state    = $package['destination']['state'] ?? '';
         $postcode = $package['destination']['postcode'] ?? '';
-        // Determine markup percent
+
         $markup_percent = 0;
-        if (isset($region_data['ZIP'][$postcode])) {
-            $markup_percent = $region_data['ZIP'][$postcode];
-        } elseif (isset($region_data['STATE'][$state])) {
-            $markup_percent = $region_data['STATE'][$state];
+        if ( isset( $zip_markups[ $postcode ] ) ) {
+            $markup_percent = $zip_markups[ $postcode ];
+        } elseif ( isset( $state_markups[ $state ] ) ) {
+            $markup_percent = $state_markups[ $state ];
         }
-        // Apply markup if applicable
-        if ($markup_percent > 0) {
-            $multiplier = 1 + ($markup_percent / 100);
-            return round($cost * $multiplier, 2);
+
+        if ( $markup_percent > 0 ) {
+            return round( $cost * (1 + $markup_percent / 100), 2 );
         }
+
         return $cost;
+    }
+
+    private function text_to_array( $text, $defaults ) {
+        if ( empty( $text ) ) return $defaults;
+        $array = [];
+        $lines = array_filter( array_map( 'trim', explode( "\n", $text ) ) );
+        foreach ( $lines as $line ) {
+            if ( preg_match( '/^(\w+)\s+([\d.]+)%?$/', $line, $m ) ) {
+                $array[ $m[1] ] = (float) $m[2];
+            }
+        }
+        return $array;
+    }
+
+    private function get_default_zip() {
+        return [
+            '07876' => 20.0, '05001' => 25.0, '02901' => 25.0,
+            '81120' => 30.0, '81302' => 30.0, '81303' => 30.0, '81301' => 30.0,
+            '80435' => 30.0, '80438' => 30.0, '80442' => 30.0, '80443' => 30.0,
+            '80446' => 30.0, '80447' => 30.0, '80451' => 30.0, '80452' => 30.0,
+            '80459' => 30.0, '80468' => 30.0, '80473' => 30.0, '80478' => 30.0,
+            '80482' => 30.0
+        ];
+    }
+
+    private function get_default_state() {
+        return [
+            'NJ' => 20.0, 'NY' => 20.0, 'VT' => 25.0, 'RI' => 25.0, 'CO' => 30.0,
+            'ME' => 25.0, 'NH' => 25.0, 'CT' => 25.0, 'VA' => 25.0, 'ND' => 35.0,
+            'WI' => 65.0, 'WY' => 30.0, 'CA' => 75.0, 'MA' => 40.0, 'MT' => 75.0,
+            'AL' => 30.0, 'MD' => 20.0, 'MI' => 150.0, 'UT' => 100.0, 'IL' => 50.0
+        ];
     }
     /**
      * Adds the Sales Rep dropdown field to the order edit screen.
