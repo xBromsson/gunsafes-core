@@ -47,6 +47,9 @@ class Admin_Order {
         add_filter('woocommerce_email_enabled_customer_completed_order', [$this, 'disable_emails_for_quote'], 10, 2);
         add_filter('woocommerce_email_enabled_new_order', [$this, 'disable_emails_for_quote'], 10, 2);
         add_filter('woocommerce_email_enabled_customer_processing_order', [$this, 'disable_emails_for_quote'], 10, 2);
+        // prevent quote emails
+        add_filter( 'woocommerce_email_enabled_customer_quote', [$this, 'disable_emails_for_quote'], 10, 2 );
+        add_filter( 'woocommerce_email_enabled_admin_quote',    [$this, 'disable_emails_for_quote'], 10, 2 );
     }
     /**
      * Applies regional shipping markups to a shipping cost based on state or ZIP code.
