@@ -68,7 +68,8 @@ class GScore_BCC_Settings {
         $value = get_option( $this->option_name, "marvin@codeblueprint.co\nsales@gunsafes.com" );
         ?>
         <textarea name="<?php echo esc_attr( $this->option_name ); ?>" rows="6" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
-        <p class="description">Enter one email address per line. Only valid emails will be saved.</p>
+        <p class="description">Enter one email address per line. Only valid emails will be saved.<br><br>These emails will receive 
+        copies of all customer related email notifications for example shipping notifications, order notifications, etc.</p>
         <?php
     }
 

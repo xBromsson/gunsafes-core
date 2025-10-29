@@ -23,7 +23,7 @@ class GScore_Regional_Markups_Settings {
         add_submenu_page(
             'woocommerce',
             'Regional Shipping Markups',
-            'Regional Markups',
+            'Regional Shipping Markups',
             'manage_options',
             'gscore-regional-markups',
             [ $this, 'render_page' ]
