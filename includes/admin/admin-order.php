@@ -122,17 +122,25 @@ class Admin_Order {
         $saved_sales_rep = $order->get_meta('_sales_rep', true);
         // Use saved value if exists; default to 'N/A' for new/existing orders without a sales rep
         $selected_sales_rep = $saved_sales_rep ?: 'N/A';
-        // Get admin users for the Sales Rep dropdown
-        $admin_users = get_users([
-            'role__in' => ['administrator'],
-            'fields' => ['ID', 'user_login', 'display_name']
+
+        // --------------------------------------------------------------
+        //  CHANGE: Only users with the custom role 'client' are shown
+        // --------------------------------------------------------------
+        $client_users = get_users([
+            'role'   => 'client',                 // <-- our custom role
+            'fields' => ['ID', 'user_login', 'display_name'],
         ]);
+
+        // Fallback – if no client users exist, keep the N/A option only
+        $users_to_show = $client_users;
         ?>
         <div class="form-field form-field-wide">
             <label for="_sales_rep"><?php esc_html_e('Sales Rep', 'gunsafes-core'); ?></label>
             <select name="_sales_rep" id="_sales_rep" class="regular-text">
-                <option value="N/A" <?php selected($selected_sales_rep, 'N/A'); ?>><?php esc_html_e('N/A', 'gunsafes-core'); ?></option>
-                <?php foreach ($admin_users as $user) : ?>
+                <option value="N/A" <?php selected($selected_sales_rep, 'N/A'); ?>>
+                    <?php esc_html_e('N/A', 'gunsafes-core'); ?>
+                </option>
+                <?php foreach ($users_to_show as $user) : ?>
                     <option value="<?php echo esc_attr($user->user_login); ?>"
                             <?php selected($selected_sales_rep, $user->user_login); ?>>
                         <?php echo esc_html($user->display_name); ?>
