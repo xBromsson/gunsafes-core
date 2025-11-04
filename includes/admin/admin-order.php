@@ -7,88 +7,82 @@ if (!class_exists('WooCommerce')) {
     return; // Exit if WooCommerce is not active
 }
 /**
- * Handles custom admin order screen functionality, including Sales Rep field, Flexible Shipping methods, APF addons, Quote status, and regional shipping markups.
+ * Handles custom admin order screen functionality.
  */
 class Admin_Order {
     public function __construct() {
-        // Restrict to admins
         if (!current_user_can('manage_woocommerce')) {
             return;
         }
-        // Register hooks for order screen customizations
         $this->register();
     }
+
     public function register(): void {
-        // Hook into WooCommerce admin order actions
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'add_custom_fields']);
         add_action('woocommerce_admin_order_item_add_line_buttons', [$this, 'add_custom_buttons']);
-        // Auto-set Sales Rep on new admin-created orders
         add_action('woocommerce_new_order', [$this, 'auto_set_sales_rep_on_creation'], 10, 1);
-        // Save the Sales Rep field on order update (only if explicitly changed)
         add_action('woocommerce_process_shop_order_meta', [$this, 'save_sales_rep'], 100, 2);
-        // Save APF addons on order update and item save
+        add_action('woocommerce_process_shop_order_meta', [$this, 'preserve_coupons_before_save'], 5, 2);
         add_action('woocommerce_process_shop_order_meta', [$this, 'save_order_item_addons'], 100, 2);
         add_action('woocommerce_saved_order_items', [$this, 'save_order_item_addons'], 20, 2);
-        // AJAX for saving addons on inline item save (fallback)
         add_action('wp_ajax_save_order_item_addons', [$this, 'ajax_save_order_item_addons']);
-        // Add Flexible Shipping instances to the shipping methods dropdown
         add_filter('woocommerce_shipping_methods', [$this, 'add_flexible_shipping_instances']);
-        // Update shipping name and calculate cost on save
         add_action('woocommerce_saved_order_items', [$this, 'update_shipping_name'], 10, 2);
-        // Calculate shipping cost on new item add (e.g., adding shipping method)
         add_action('woocommerce_new_order_item', [$this, 'handle_new_order_item'], 10, 3);
-        // Add Addons column to order items table (hidden, used as placeholder)
         add_action('woocommerce_admin_order_item_headers', [$this, 'add_addons_column_header']);
         add_action('woocommerce_admin_order_item_values', [$this, 'display_addons_column'], 10, 3);
-        // Enqueue assets for the order screen
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
-        // Prevent stock reduction and emails for quote status
         add_filter('woocommerce_order_item_quantity', [$this, 'prevent_stock_reduction_for_quote'], 10, 3);
         add_filter('woocommerce_email_enabled_customer_completed_order', [$this, 'disable_emails_for_quote'], 10, 2);
         add_filter('woocommerce_email_enabled_new_order', [$this, 'disable_emails_for_quote'], 10, 2);
         add_filter('woocommerce_email_enabled_customer_processing_order', [$this, 'disable_emails_for_quote'], 10, 2);
-        // prevent quote emails
-        add_filter( 'woocommerce_email_enabled_customer_quote', [$this, 'disable_emails_for_quote'], 10, 2 );
-        add_filter( 'woocommerce_email_enabled_admin_quote',    [$this, 'disable_emails_for_quote'], 10, 2 );
+        add_filter('woocommerce_email_enabled_customer_quote', [$this, 'disable_emails_for_quote'], 10, 2);
+        add_filter('woocommerce_email_enabled_admin_quote', [$this, 'disable_emails_for_quote'], 10, 2);
     }
-    /**
-     * Applies regional shipping markups to a shipping cost based on state or ZIP code.
-     *
-     * @param float $cost The original shipping cost.
-     * @param array $package The shipping package data.
-     * @return float The adjusted shipping cost.
-     */
-    private function apply_regional_shipping_markups($cost, $package): float {
-        $zip_text   = get_option( 'gscore_regional_markups_zip', '' );
-        $state_text = get_option( 'gscore_regional_markups_state', '' );
 
-        $zip_markups   = $this->text_to_array( $zip_text, $this->get_default_zip() );
-        $state_markups = $this->text_to_array( $state_text, $this->get_default_state() );
+    public function preserve_coupons_before_save($post_id, $post): void {
+        $order = wc_get_order($post_id);
+        if (!$order) return;
+
+        $coupons = $order->get_items('coupon');
+        $coupon_codes = [];
+        foreach ($coupons as $item) {
+            $coupon_codes[] = $item->get_code();
+        }
+        update_post_meta($post_id, '_temp_coupon_backup', $coupon_codes);
+        error_log("[COUPON DEBUG] Backup saved for order {$post_id}: " . count($coupon_codes) . " coupons (codes only)");
+    }
+
+    private function apply_regional_shipping_markups($cost, $package): float {
+        $zip_text   = get_option('gscore_regional_markups_zip', '');
+        $state_text = get_option('gscore_regional_markups_state', '');
+
+        $zip_markups   = $this->text_to_array($zip_text, $this->get_default_zip());
+        $state_markups = $this->text_to_array($state_text, $this->get_default_state());
 
         $state    = $package['destination']['state'] ?? '';
         $postcode = $package['destination']['postcode'] ?? '';
 
         $markup_percent = 0;
-        if ( isset( $zip_markups[ $postcode ] ) ) {
-            $markup_percent = $zip_markups[ $postcode ];
-        } elseif ( isset( $state_markups[ $state ] ) ) {
-            $markup_percent = $state_markups[ $state ];
+        if (isset($zip_markups[$postcode])) {
+            $markup_percent = $zip_markups[$postcode];
+        } elseif (isset($state_markups[$state])) {
+            $markup_percent = $state_markups[$state];
         }
 
-        if ( $markup_percent > 0 ) {
-            return round( $cost * (1 + $markup_percent / 100), 2 );
+        if ($markup_percent > 0) {
+            return round($cost * (1 + $markup_percent / 100), 2);
         }
-
         return $cost;
     }
 
-    private function text_to_array( $text, $defaults ) {
-        if ( empty( $text ) ) return $defaults;
+    private function text_to_array($text, $defaults) {
+        if (empty($text)) return $defaults;
         $array = [];
-        $lines = array_filter( array_map( 'trim', explode( "\n", $text ) ) );
-        foreach ( $lines as $line ) {
-            if ( preg_match( '/^(\w+)\s+([\d.]+)%?$/', $line, $m ) ) {
-                $array[ $m[1] ] = (float) $m[2];
+        $lines = array_filter(array_map('trim', explode("\n", $text)));
+        foreach ($lines as $line) {
+            if (preg_match('/^(\w+)\s+([\d.]+)%?$/', $line, $m)) {
+                $array[$m[1]] = (float) $m[2];
             }
         }
         return $array;
@@ -113,28 +107,16 @@ class Admin_Order {
             'AL' => 30.0, 'MD' => 20.0, 'MI' => 150.0, 'UT' => 100.0, 'IL' => 50.0
         ];
     }
-    /**
-     * Adds the Sales Rep dropdown field to the order edit screen.
-     *
-     * @param WC_Order $order The current order object.
-     */
+
     public function add_custom_fields($order): void {
-        // Get the current logged-in user
         $current_user = wp_get_current_user();
-        $default_sales_rep = $current_user->user_login;
         $saved_sales_rep = $order->get_meta('_sales_rep', true);
-        // Use saved value if exists; default to 'N/A' for new/existing orders without a sales rep
         $selected_sales_rep = $saved_sales_rep ?: 'N/A';
 
-        // --------------------------------------------------------------
-        //  CHANGE: Only users with the custom role 'client' are shown
-        // --------------------------------------------------------------
         $client_users = get_users([
-            'role'   => 'client',                 // <-- our custom role
+            'role'   => 'client',
             'fields' => ['ID', 'user_login', 'display_name'],
         ]);
-
-        // Fallback – if no client users exist, keep the N/A option only
         $users_to_show = $client_users;
         ?>
         <div class="form-field form-field-wide">
@@ -153,38 +135,20 @@ class Admin_Order {
         </div>
         <?php
     }
-    /**
-     * Auto-sets the Sales Rep on new orders created in the admin (e.g., manual/phone orders).
-     *
-     * @param int $order_id The new order ID.
-     */
+
     public function auto_set_sales_rep_on_creation($order_id): void {
-        if (!is_admin() || !current_user_can('manage_woocommerce')) {
-            return; // Skip if not in admin or user lacks permissions
-        }
+        if (!is_admin() || !current_user_can('manage_woocommerce')) return;
         $order = wc_get_order($order_id);
-        if (!$order) {
-            return;
-        }
-        // Set flag to indicate this is a manual admin-created order
+        if (!$order) return;
         $order->update_meta_data('_is_manual_admin_order', true);
-        // Auto-set sales rep to current user
         $current_user = wp_get_current_user();
         $order->update_meta_data('_sales_rep', $current_user->user_login);
         $order->save();
     }
-    /**
-     * Saves the Sales Rep field during order update (only if explicitly changed).
-     *
-     * @param int $post_id The order ID.
-     * @param WP_Post $post The order post object.
-     */
+
     public function save_sales_rep($post_id, $post): void {
         $order = wc_get_order($post_id);
-        if (!$order) {
-            return;
-        }
-        // Save Sales Rep only if POST value is set and differs from current
+        if (!$order) return;
         if (isset($_POST['_sales_rep'])) {
             $new_value = sanitize_text_field($_POST['_sales_rep']);
             $current_value = $order->get_meta('_sales_rep', true) ?: 'N/A';
@@ -194,23 +158,11 @@ class Admin_Order {
             }
         }
     }
-    /**
-     * Adds custom buttons to the order item section (placeholder for future features).
-     *
-     * @param WC_Order $order The current order object.
-     */
-    public function add_custom_buttons($order): void {
-        // Placeholder for custom buttons
-    }
-    /**
-     * Adds each Flexible Shipping instance as a separate shipping method for the "Add shipping" dropdown, but only if available for the current order.
-     *
-     * @param array $methods Existing shipping methods.
-     * @return array Modified shipping methods.
-     */
+
+    public function add_custom_buttons($order): void {}
+
     public function add_flexible_shipping_instances($methods): array {
         global $wpdb;
-        // Fetch all enabled Flexible Shipping instances from the database
         $instances = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT instance_id FROM {$wpdb->prefix}woocommerce_shipping_zone_methods WHERE method_id = %s AND is_enabled = 1",
@@ -218,11 +170,9 @@ class Admin_Order {
             ),
             ARRAY_A
         );
-        if (!$instances) {
-            return $methods;
-        }
-        $available_instances = $instances; // Default to all if not on order edit page
-        // Check if on order edit screen with existing order
+        if (!$instances) return $methods;
+
+        $available_instances = $instances;
         $screen = get_current_screen();
         if (is_admin() && $screen && $screen->id === 'shop_order' && isset($_GET['post'])) {
             $order_id = absint($_GET['post']);
@@ -258,13 +208,12 @@ class Admin_Order {
                 }
             }
         }
-        // Add available instances as custom methods
+
         foreach ($available_instances as $instance) {
             $instance_id = $instance['instance_id'];
             $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
             if (isset($settings['title'])) {
                 $method_id = "flexible_shipping_{$instance_id}";
-                // Create a custom shipping method instance with public properties
                 $methods[$method_id] = new class($instance_id, $settings['title']) extends WC_Shipping_Method {
                     public $instance_id;
                     public $method_title;
@@ -274,49 +223,34 @@ class Admin_Order {
                         $this->method_title = $title;
                         $this->title = $title;
                     }
-                    public function init() {
-                        // Minimal initialization for admin dropdown
-                    }
-                    public function is_available($package) {
-                        return true; // Allow selection in admin regardless of package
-                    }
+                    public function init() {}
+                    public function is_available($package) { return true; }
                 };
             }
         }
         return $methods;
     }
-    /**
-     * Saves the APF addons during order update or item save.
-     *
-     * @param int $order_id The order ID.
-     * @param array|WP_Post $items_or_post The items array or post object (depending on hook).
-     */
+
     public function save_order_item_addons($order_id, $items_or_post = null): void {
-        // Check for order_item_addons in $_POST or parse from $_POST['items']
         $addons_post = [];
         if (isset($_POST['order_item_addons']) && is_array($_POST['order_item_addons'])) {
             $addons_post = wp_unslash($_POST['order_item_addons']);
         } elseif (isset($_POST['items']) && is_string($_POST['items'])) {
-            // Parse URL-encoded items string
             parse_str($_POST['items'], $items_array);
             if (isset($items_array['order_item_addons']) && is_array($items_array['order_item_addons'])) {
                 $addons_post = wp_unslash($items_array['order_item_addons']);
             }
         }
+
         $order = wc_get_order($order_id);
-        if (!$order) {
-            return;
-        }
+        if (!$order) return;
+
         foreach ($order->get_items() as $item_id => $item) {
-            if ($item->get_type() !== 'line_item') {
-                continue;
-            }
+            if ($item->get_type() !== 'line_item') continue;
             $product = $item->get_product();
-            if (!$product) {
-                continue;
-            }
+            if (!$product) continue;
+
             $fields = $this->get_apf_fields_for_product($product);
-            // Calculate previous addon cost and clear existing meta
             $previous_addon_cost = 0.0;
             foreach ($fields as $field) {
                 $display_key = sanitize_text_field($field['label']);
@@ -330,9 +264,9 @@ class Admin_Order {
                     }
                     $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
                 }
-                $item->delete_meta_data($display_key); // Clear existing meta
+                $item->delete_meta_data($display_key);
             }
-            // If no addons data for this item, reset price to base product price
+
             if (!isset($addons_post[$item_id])) {
                 $quantity = $item->get_quantity();
                 $base_price = (float) $product->get_price();
@@ -342,18 +276,17 @@ class Admin_Order {
                 $item->save();
                 continue;
             }
+
             $addons = $addons_post[$item_id];
-            // Process new addons
             $addon_cost = 0.0;
             foreach ($fields as $field) {
                 $field_id = $field['id'];
                 $display_key = sanitize_text_field($field['label']);
-                // Check if field is set, including empty string for select
                 if (array_key_exists($field_id, $addons)) {
                     $value = is_array($addons[$field_id]) ? array_map('sanitize_text_field', $addons[$field_id]) : sanitize_text_field($addons[$field_id]);
                     $formatted = [];
                     if ($field['type'] === 'select' || $field['type'] === 'radio') {
-                        if ($value !== '') { // Non-empty value
+                        if ($value !== '') {
                             foreach ($field['options']['choices'] as $option) {
                                 if ($option['slug'] === $value) {
                                     $sel = $option['label'];
@@ -390,7 +323,7 @@ class Admin_Order {
                     $addon_cost += $this->get_addon_cost_from_value($value, $field);
                 }
             }
-            // Reset price to base product price plus new addon cost
+
             $quantity = $item->get_quantity();
             $base_price = (float) $product->get_price();
             $new_subtotal = ($base_price + $addon_cost) * $quantity;
@@ -398,33 +331,52 @@ class Admin_Order {
             $item->set_total($new_subtotal);
             $item->save();
         }
+
+        // === RESTORE & RECALCULATE COUPONS ===
+        $backup_codes = get_post_meta($order_id, '_temp_coupon_backup', true);
+        if (!empty($backup_codes)) {
+            error_log("[COUPON DEBUG] Restoring " . count($backup_codes) . " coupon codes for order {$order_id}");
+
+            // Remove all existing coupon items
+            foreach ($order->get_items('coupon') as $coupon_item) {
+                $order->remove_item($coupon_item->get_id());
+            }
+            error_log("[COUPON DEBUG] Removed all existing coupon items");
+
+            // Re-apply each code
+            foreach ($backup_codes as $code) {
+                $result = $order->apply_coupon($code);
+                if (is_wp_error($result)) {
+                    error_log("[COUPON DEBUG] Failed to apply coupon {$code}: " . $result->get_error_message());
+                } else {
+                    error_log("[COUPON DEBUG] Successfully applied coupon {$code}");
+                }
+            }
+            delete_post_meta($order_id, '_temp_coupon_backup');
+        }
+
+        error_log("[COUPON DEBUG] Items subtotal before final calc: " . $order->get_subtotal());
         $order->calculate_totals();
+        error_log("[COUPON DEBUG] Final total for order {$order_id}: " . $order->get_total());
     }
-    /**
-     * AJAX handler for saving addons on inline item save (fallback).
-     */
+
     public function ajax_save_order_item_addons(): void {
         check_ajax_referer('order-item', 'security');
-        if (!current_user_can('edit_shop_orders')) {
-            wp_die(-1);
-        }
+        if (!current_user_can('edit_shop_orders')) wp_die(-1);
+
         $response = ['success' => false];
         $order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
         $item_id = isset($_POST['item_id']) ? absint($_POST['item_id']) : 0;
         $order = wc_get_order($order_id);
-        if (!$order) {
-            wp_send_json($response);
-        }
+        if (!$order) wp_send_json($response);
+
         $item = $order->get_item($item_id);
-        if (!$item || $item->get_type() !== 'line_item') {
-            wp_send_json($response);
-        }
+        if (!$item || $item->get_type() !== 'line_item') wp_send_json($response);
+
         $product = $item->get_product();
-        if (!$product) {
-            wp_send_json($response);
-        }
+        if (!$product) wp_send_json($response);
+
         $fields = $this->get_apf_fields_for_product($product);
-        // Calculate previous addon cost and clear existing meta
         $previous_addon_cost = 0.0;
         foreach ($fields as $field) {
             $display_key = sanitize_text_field($field['label']);
@@ -438,23 +390,20 @@ class Admin_Order {
                 }
                 $previous_addon_cost += $this->get_addon_cost_from_value($parsed_value, $field);
             }
-            $item->delete_meta_data($display_key); // Clear existing meta
+            $item->delete_meta_data($display_key);
         }
+
         $addons = [];
         if (isset($_POST['order_item_addons']) && is_array($_POST['order_item_addons'])) {
             foreach ($_POST['order_item_addons'] as $input) {
-                if (!isset($input['name'], $input['value'])) {
-                    continue;
-                }
+                if (!isset($input['name'], $input['value'])) continue;
                 $name = $input['name'];
                 $value = sanitize_text_field($input['value']);
                 if (preg_match('/^order_item_addons\[(\d+)\]\[([^\]]+)\](\[\])?$/', $name, $matches)) {
                     $parsed_item_id = $matches[1];
                     $field_id = $matches[2];
                     $is_array = !empty($matches[3]);
-                    if ($parsed_item_id != $item_id) {
-                        continue;
-                    }
+                    if ($parsed_item_id != $item_id) continue;
                     if ($is_array) {
                         $addons[$field_id][] = $value;
                     } else {
@@ -463,7 +412,7 @@ class Admin_Order {
                 }
             }
         }
-        // If no addons data, reset price to base product price
+
         if (empty($addons)) {
             $quantity = $item->get_quantity();
             $base_price = (float) $product->get_price();
@@ -472,7 +421,32 @@ class Admin_Order {
             $item->set_total($new_subtotal);
             $item->calculate_taxes();
             $item->save();
+
+            $backup_codes = get_post_meta($order_id, '_temp_coupon_backup', true);
+            if (!empty($backup_codes)) {
+                error_log("[COUPON DEBUG] Restoring " . count($backup_codes) . " coupon codes for order {$order_id} (AJAX)");
+
+                // Remove all existing coupon items
+                foreach ($order->get_items('coupon') as $coupon_item) {
+                    $order->remove_item($coupon_item->get_id());
+                }
+                error_log("[COUPON DEBUG] Removed all existing coupon items (AJAX)");
+
+                // Re-apply each code
+                foreach ($backup_codes as $code) {
+                    $result = $order->apply_coupon($code);
+                    if (is_wp_error($result)) {
+                        error_log("[COUPON DEBUG] Failed to apply coupon {$code} (AJAX): " . $result->get_error_message());
+                    } else {
+                        error_log("[COUPON DEBUG] Successfully applied coupon {$code} (AJAX)");
+                    }
+                }
+                delete_post_meta($order_id, '_temp_coupon_backup');
+            }
+
+            error_log("[COUPON DEBUG] Items subtotal before final calc (AJAX): " . $order->get_subtotal());
             $order->calculate_totals();
+
             ob_start();
             wc_get_template('admin/meta-boxes/views/html-order-item-taxes.php', ['item' => $item]);
             $html = ob_get_clean();
@@ -482,17 +456,16 @@ class Admin_Order {
             $response['total'] = html_entity_decode(wc_price($item->get_total()), ENT_QUOTES, 'UTF-8');
             wp_send_json($response);
         }
-        // Process new addons
+
         $addon_cost = 0.0;
         foreach ($fields as $field) {
             $field_id = $field['id'];
             $display_key = sanitize_text_field($field['label']);
-            // Check if field is set, including empty string for select
             if (array_key_exists($field_id, $addons)) {
                 $value = is_array($addons[$field_id]) ? $addons[$field_id] : $addons[$field_id];
                 $formatted = [];
                 if ($field['type'] === 'select' || $field['type'] === 'radio') {
-                    if ($value !== '') { // Non-empty value
+                    if ($value !== '') {
                         foreach ($field['options']['choices'] as $option) {
                             if ($option['slug'] === $value) {
                                 $sel = $option['label'];
@@ -529,7 +502,7 @@ class Admin_Order {
                 $addon_cost += $this->get_addon_cost_from_value($value, $field);
             }
         }
-        // Reset price to base product price plus new addon cost
+
         $quantity = $item->get_quantity();
         $base_price = (float) $product->get_price();
         $new_subtotal = ($base_price + $addon_cost) * $quantity;
@@ -537,7 +510,32 @@ class Admin_Order {
         $item->set_total($new_subtotal);
         $item->calculate_taxes();
         $item->save();
+
+        $backup_codes = get_post_meta($order_id, '_temp_coupon_backup', true);
+        if (!empty($backup_codes)) {
+            error_log("[COUPON DEBUG] Restoring " . count($backup_codes) . " coupon codes for order {$order_id} (AJAX)");
+
+            // Remove all existing coupon items
+            foreach ($order->get_items('coupon') as $coupon_item) {
+                $order->remove_item($coupon_item->get_id());
+            }
+            error_log("[COUPON DEBUG] Removed all existing coupon items (AJAX)");
+
+            // Re-apply each code
+            foreach ($backup_codes as $code) {
+                $result = $order->apply_coupon($code);
+                if (is_wp_error($result)) {
+                    error_log("[COUPON DEBUG] Failed to apply coupon {$code} (AJAX): " . $result->get_error_message());
+                } else {
+                    error_log("[COUPON DEBUG] Successfully applied coupon {$code} (AJAX)");
+                }
+            }
+            delete_post_meta($order_id, '_temp_coupon_backup');
+        }
+
+        error_log("[COUPON DEBUG] Items subtotal before final calc (AJAX): " . $order->get_subtotal());
         $order->calculate_totals();
+
         ob_start();
         wc_get_template('admin/meta-boxes/views/html-order-item-taxes.php', ['item' => $item]);
         $html = ob_get_clean();
@@ -547,63 +545,34 @@ class Admin_Order {
         $response['total'] = html_entity_decode(wc_price($item->get_total()), ENT_QUOTES, 'UTF-8');
         wp_send_json($response);
     }
-    /**
-     * Updates the "Shipping name" field and recalculates cost for Flexible Shipping methods after saving.
-     *
-     * @param int $order_id The order ID.
-     * @param array $items The order items.
-     */
+
     public function update_shipping_name($order_id, $items): void {
         $order = wc_get_order($order_id);
-        if (!$order) {
-            return;
-        }
-        $shipping_items = $order->get_items('shipping');
-        foreach ($shipping_items as $item_id => $item) {
+        if (!$order) return;
+        foreach ($order->get_items('shipping') as $item) {
             $this->calculate_and_update_shipping_item($item, $order);
         }
-        // Recalculate order totals after updates
         $order->calculate_totals();
     }
-    /**
-     * Handles new order items (e.g., shipping method addition) to calculate cost.
-     *
-     * @param int $item_id The order item ID.
-     * @param WC_Order_Item $item The order item object.
-     * @param int $order_id The order ID.
-     */
+
     public function handle_new_order_item($item_id, $item, $order_id): void {
-        if (!($item instanceof WC_Order_Item_Shipping)) {
-            return;
-        }
+        if (!($item instanceof WC_Order_Item_Shipping)) return;
         $order = wc_get_order($order_id);
-        if (!$order) {
-            return;
-        }
+        if (!$order) return;
         $this->calculate_and_update_shipping_item($item, $order);
     }
-    /**
-     * Calculates and updates shipping cost for a Flexible Shipping item based on order contents, allowing manual overrides and applying regional markups.
-     *
-     * @param WC_Order_Item_Shipping $item The shipping order item.
-     * @param WC_Order $order The order object.
-     */
+
     private function calculate_and_update_shipping_item(WC_Order_Item_Shipping $item, WC_Order $order): void {
         $method_id = $item->get_method_id();
-        if (strpos($method_id, 'flexible_shipping_') !== 0) {
-            return;
-        }
+        if (strpos($method_id, 'flexible_shipping_') !== 0) return;
+
         $instance_id = (int) str_replace('flexible_shipping_', '', $method_id);
         $settings = get_option("woocommerce_flexible_shipping_single_{$instance_id}_settings", []);
-        if (!isset($settings['title'])) {
-            return;
-        }
-        // Get the real Flexible Shipping method instance
+        if (!isset($settings['title'])) return;
+
         $shipping_method = WC_Shipping_Zones::get_shipping_method($instance_id);
-        if (!$shipping_method || $shipping_method->id !== 'flexible_shipping_single') {
-            return;
-        }
-        // Build package from order data
+        if (!$shipping_method || $shipping_method->id !== 'flexible_shipping_single') return;
+
         $contents = $this->get_order_contents($order);
         if (empty($contents)) {
             $calculated_cost = 0.0;
@@ -624,54 +593,36 @@ class Admin_Order {
                     'address_2' => $order->get_shipping_address_2(),
                 ],
             ];
-            // Run calculation
             $shipping_method->calculate_shipping($package);
-            // Get rates (Flexible Shipping typically adds one rate)
             $rates = $shipping_method->rates;
             $calculated_cost = 0.0;
             $calculated_taxes = ['total' => []];
             $label = $settings['title'];
             if (!empty($rates)) {
-                $rate = reset($rates); // Use the first rate
+                $rate = reset($rates);
                 $calculated_cost = (float) $rate->cost;
                 $calculated_taxes = ['total' => $rate->taxes];
                 $label = $rate->label;
             }
-            // Apply regional shipping markups
             $calculated_cost = $this->apply_regional_shipping_markups($calculated_cost, $package);
-            // Recalculate taxes based on adjusted cost
             if ($shipping_method->tax_status === 'taxable') {
                 $tax_rates = WC_Tax::get_shipping_tax_rates();
                 $calculated_taxes = ['total' => WC_Tax::calc_tax($calculated_cost, $tax_rates, false)];
-            } else {
-                $calculated_taxes = ['total' => []];
             }
         }
-        // Get current total (after any POST updates)
-        $current_total = (float) $item->get_total();
-        // Always update to new calculated cost and taxes
+
         $item->set_total($calculated_cost);
         $item->set_taxes($calculated_taxes);
-        // Update name to (possibly new) label
         $item->set_name($label);
         $item->save();
     }
-    /**
-     * Builds the order contents array for reuse in shipping and addon calculations.
-     *
-     * @param WC_Order $order The order object.
-     * @return array The order contents array.
-     */
+
     private function get_order_contents(WC_Order $order): array {
         $contents = [];
         foreach ($order->get_items() as $order_item_id => $order_item) {
-            if ($order_item->get_type() !== 'line_item') {
-                continue;
-            }
+            if ($order_item->get_type() !== 'line_item') continue;
             $product = $order_item->get_product();
-            if (!$product || !$product->needs_shipping()) {
-                continue;
-            }
+            if (!$product || !$product->needs_shipping()) continue;
             $contents[$order_item_id] = [
                 'key' => $order_item_id,
                 'product_id' => $order_item->get_product_id(),
@@ -687,19 +638,11 @@ class Admin_Order {
         }
         return $contents;
     }
-    /**
-     * Adds the "Addons" column header to the order items table (hidden via CSS).
-     */
+
     public function add_addons_column_header(): void {
         echo '<th class="item_addons sortable" data-sort="string-ins">' . esc_html__('Addons', 'gunsafes-core') . '</th>';
     }
-    /**
-     * Displays the APF addons in the order items table under the "Addons" column (will be moved to sub-row via JS).
-     *
-     * @param WC_Product|null $product The product object.
-     * @param WC_Order_Item $item The order item object.
-     * @param int $item_id The order item ID.
-     */
+
     public function display_addons_column($product, $item, $item_id): void {
         if ($item->get_type() !== 'line_item' || !$product) {
             echo '<td class="item_addons"></td>';
@@ -723,14 +666,13 @@ class Admin_Order {
                 <?php if ($field['type'] === 'checkbox' || $field['type'] === 'checkboxes') : ?>
                     <div class="addon-checkbox-group">
                         <?php
-                        // For checkboxes, split saved_value if it's a comma-separated string
                         $saved_values = ($field['type'] === 'checkboxes' && !empty($saved_value)) ? explode(',', $saved_value) : ($saved_value ? [$saved_value] : []);
                         foreach ($field['options']['choices'] as $option) : ?>
                             <label style="display: block; margin-bottom: 5px;">
                                 <input type="checkbox"
                                        name="order_item_addons[<?php echo esc_attr($item_id); ?>][<?php echo esc_attr($field_id); ?>][]"
                                        value="<?php echo esc_attr($option['slug']); ?>"
-                                       <?php if (in_array($option['slug'], $saved_values)) echo 'checked'; ?> />
+                                       <?php checked(in_array($option['slug'], $saved_values)); ?> />
                                 <?php echo esc_html($option['label']); ?>
                                 <?php if (!empty($option['pricing_amount'])) : ?>
                                     (+<?php echo wc_price($option['pricing_amount']); ?>)
@@ -773,47 +715,26 @@ class Admin_Order {
         }
         echo '</td>';
     }
-    /**
-     * Parses the formatted display value back to the raw value (slug or comma-separated slugs).
-     *
-     * @param string $formatted The formatted string saved in meta.
-     * @param array $field The field configuration.
-     * @return string The parsed raw value (string, comma-separated for checkboxes).
-     */
+
     private function parse_formatted_to_value($formatted, $field): string {
-        // Handle empty or invalid input
-        if (empty($formatted) || !is_string($formatted)) {
-            return '';
-        }
-        // Split by comma for multi-values
+        if (empty($formatted) || !is_string($formatted)) return '';
         $parts = explode(', ', $formatted);
         $clean_parts = [];
         foreach ($parts as $part) {
-            // Remove the (+$xx.xx) part
             $part = preg_replace('/ \(([^)]+)\)$/', '', $part);
             $clean_parts[] = trim($part);
         }
         $type = $field['type'];
         if ($type === 'select' || $type === 'radio') {
-            if (count($clean_parts) !== 1) {
-                return '';
-            }
+            if (count($clean_parts) !== 1) return '';
             $clean = $clean_parts[0];
             foreach ($field['options']['choices'] as $option) {
-                if ($option['label'] === $clean) {
-                    return $option['slug'];
-                }
+                if ($option['label'] === $clean) return $option['slug'];
             }
             return '';
         } elseif ($type === 'checkbox') {
-            if (count($clean_parts) !== 1) {
-                return '';
-            }
-            $clean = $clean_parts[0];
-            if ($clean === $field['label']) {
-                return '1';
-            }
-            return '';
+            if (count($clean_parts) !== 1) return '';
+            return $clean_parts[0] === $field['label'] ? '1' : '';
         } elseif ($type === 'checkboxes') {
             $selected = [];
             foreach ($clean_parts as $clean) {
@@ -824,25 +745,16 @@ class Admin_Order {
                     }
                 }
             }
-            // Return comma-separated slugs for multiple selections
             return implode(',', $selected);
         }
         return '';
     }
-    /**
-     * Calculates the addon cost based on the raw value and field configuration.
-     *
-     * @param mixed $value The raw value (string, array, or '1').
-     * @param array $field The field configuration.
-     * @return float The calculated cost.
-     */
+
     private function get_addon_cost_from_value($value, $field): float {
         $cost = 0.0;
         $type = $field['type'];
         if ($type === 'select' || $type === 'radio') {
-            if (!is_string($value)) {
-                return $cost;
-            }
+            if (!is_string($value)) return $cost;
             foreach ($field['options']['choices'] as $option) {
                 if ($option['slug'] === $value) {
                     $cost += (float) ($option['pricing_amount'] ?? 0);
@@ -850,11 +762,8 @@ class Admin_Order {
                 }
             }
         } elseif ($type === 'checkbox') {
-            if ($value === '1') {
-                $cost += (float) ($field['pricing']['amount'] ?? 0);
-            }
+            if ($value === '1') $cost += (float) ($field['pricing']['amount'] ?? 0);
         } elseif ($type === 'checkboxes') {
-            // Handle both array and comma-separated string
             $values = is_array($value) ? $value : (empty($value) ? [] : explode(',', $value));
             foreach ($field['options']['choices'] as $option) {
                 if (in_array($option['slug'], $values)) {
@@ -864,25 +773,16 @@ class Admin_Order {
         }
         return $cost;
     }
-    /**
-     * Fetches APF fields for a given product or variation.
-     *
-     * @param WC_Product $product The product object.
-     * @return array List of APF fields.
-     */
+
     private function get_apf_fields_for_product(WC_Product $product): array {
         $fields = [];
         $product_id = $product->is_type('variation') ? $product->get_parent_id() : $product->get_id();
         $variation_id = $product->is_type('variation') ? $product->get_id() : 0;
-        // Try variation first, then parent product
         $field_group = $variation_id ? get_post_meta($variation_id, '_wapf_fieldgroup', true) : [];
         if (empty($field_group) || !is_array($field_group)) {
             $field_group = get_post_meta($product_id, '_wapf_fieldgroup', true);
         }
-        if (empty($field_group) || !is_array($field_group) || empty($field_group['fields'])) {
-            return [];
-        }
-        // Verify product matches rule_groups
+        if (empty($field_group) || !is_array($field_group) || empty($field_group['fields'])) return [];
         $applies = false;
         if (!empty($field_group['rule_groups'])) {
             foreach ($field_group['rule_groups'] as $group) {
@@ -898,9 +798,7 @@ class Admin_Order {
                 }
             }
         }
-        if (!$applies) {
-            return [];
-        }
+        if (!$applies) return [];
         foreach ($field_group['fields'] as $field) {
             if (in_array($field['type'], ['checkbox', 'checkboxes', 'select', 'radio'], true)) {
                 $fields[] = $field;
@@ -908,54 +806,20 @@ class Admin_Order {
         }
         return $fields;
     }
-    /**
-     * Prevents stock reduction for orders with 'quote' status.
-     *
-     * @param int $qty The quantity to reduce stock by.
-     * @param WC_Order $order The order object.
-     * @param WC_Order_Item $item The order item object.
-     * @return int The modified quantity (0 for quote status).
-     */
+
     public function prevent_stock_reduction_for_quote($qty, $order, $item): int {
-        if ($order->get_status() === 'quote') {
-            return 0;
-        }
-        return $qty;
+        return $order->get_status() === 'quote' ? 0 : $qty;
     }
-    /**
-     * Disables specific email notifications for orders with 'quote' status.
-     *
-     * @param bool $enabled Whether the email is enabled.
-     * @param WC_Order $order The order object.
-     * @return bool Modified enabled status.
-     */
+
     public function disable_emails_for_quote($enabled, $order): bool {
-        if ($order && $order->get_status() === 'quote') {
-            return false;
-        }
-        return $enabled;
+        return $order && $order->get_status() === 'quote' ? false : $enabled;
     }
-    /**
-     * Enqueues styles and scripts specific to the order screen.
-     */
+
     public function enqueue_assets(): void {
-        // Restrict to order edit screen for efficiency
         $screen = get_current_screen();
         if ($screen && $screen->id === 'shop_order') {
-            wp_enqueue_style(
-                'gunsafes-core-order',
-                GUNSAFES_CORE_URL . 'assets/css/admin.css',
-                [],
-                GUNSAFES_CORE_VER
-            );
-            wp_enqueue_script(
-                'gunsafes-core-order',
-                GUNSAFES_CORE_URL . 'assets/js/admin.js',
-                ['jquery'],
-                GUNSAFES_CORE_VER,
-                true
-            );
-            // Add inline JS to move addons to sub-row and handle inline save
+            wp_enqueue_style('gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/css/admin.css', [], GUNSAFES_CORE_VER);
+            wp_enqueue_script('gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/js/admin.js', ['jquery'], GUNSAFES_CORE_VER, true);
             $js = "
             jQuery(document).ready(function($) {
                 function moveAddons() {
@@ -975,7 +839,6 @@ class Admin_Order {
                 moveAddons();
                 $('body').on('added_order_item', moveAddons);
                 $('body').on('woocommerce_saved_order_items', moveAddons);
-                // Move addons to inline edit form
                 $('body').on('click', '.edit-order-item', function(e) {
                     var item_id = $(this).data('order_item_id');
                     setTimeout(function() {
@@ -987,7 +850,6 @@ class Admin_Order {
                         }
                     }, 100);
                 });
-                // Handle inline save
                 $('body').on('click', '.save', function(e) {
                     var \$row = $(this).closest('tr.item');
                     var item_id = \$row.find('input.order_item_id').val();
@@ -1012,14 +874,12 @@ class Admin_Order {
             });
             ";
             wp_add_inline_script('gunsafes-core-order', $js);
-            // Add inline CSS to hide addons column and style sub-row
             $css = '
             th.item_addons, td.item_addons { display: none; }
             .addons-row td { padding: 10px; background: #f8f8f8; border-top: 1px solid #ddd; }
             .addon-field { margin-bottom: 8px; }
             .addon-field label { display: block; font-weight: bold; }
-            .addon-radio-group { margin-top: 5px; }
-            .addon-checkbox-group { margin-top: 5px; }
+            .addon-radio-group, .addon-checkbox-group { margin-top: 5px; }
             .required { color: red; }
             .gunsafes-addons-edit { margin-top: 10px; padding: 10px; background: #f8f8f8; border: 1px solid #ddd; }
             ';
