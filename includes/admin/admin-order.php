@@ -23,6 +23,7 @@ class Admin_Order {
         add_action('woocommerce_new_order', [$this, 'auto_set_sales_rep_on_creation'], 10, 1);
         add_action('woocommerce_process_shop_order_meta', [$this, 'save_sales_rep'], 100, 2);
         add_action('woocommerce_process_shop_order_meta', [$this, 'preserve_coupons_before_save'], 5, 2);
+        add_action('woocommerce_saved_order_items', [$this, 'preserve_coupons_before_save'], 5, 2); // ← FIXED: Backup coupons on item save too
         add_action('woocommerce_process_shop_order_meta', [$this, 'save_order_item_addons'], 100, 2);
         add_action('woocommerce_saved_order_items', [$this, 'save_order_item_addons'], 20, 2);
         add_action('wp_ajax_save_order_item_addons', [$this, 'ajax_save_order_item_addons']);
@@ -40,7 +41,7 @@ class Admin_Order {
         add_filter('woocommerce_email_enabled_admin_quote', [$this, 'disable_emails_for_quote'], 10, 2);
     }
 
-    public function preserve_coupons_before_save($post_id, $post): void {
+    public function preserve_coupons_before_save($post_id, $post = null): void {
         $order = wc_get_order($post_id);
         if (!$order) return;
 
@@ -50,7 +51,10 @@ class Admin_Order {
             $coupon_codes[] = $item->get_code();
         }
         update_post_meta($post_id, '_temp_coupon_backup', $coupon_codes);
-        error_log("[COUPON DEBUG] Backup saved for order {$post_id}: " . count($coupon_codes) . " coupons (codes only)");
+
+        // Optional: Debug which hook triggered it
+        $hook = current_filter();
+        error_log("[COUPON DEBUG] Backup saved via {$hook} for order {$post_id}: " . count($coupon_codes) . " coupons (codes only)");
     }
 
     private function apply_regional_shipping_markups($cost, $package): float {
@@ -357,6 +361,7 @@ class Admin_Order {
 
         error_log("[COUPON DEBUG] Items subtotal before final calc: " . $order->get_subtotal());
         $order->calculate_totals();
+        $order->save(); // ← CRITICAL: Save to persist coupon
         error_log("[COUPON DEBUG] Final total for order {$order_id}: " . $order->get_total());
     }
 
@@ -446,6 +451,7 @@ class Admin_Order {
 
             error_log("[COUPON DEBUG] Items subtotal before final calc (AJAX): " . $order->get_subtotal());
             $order->calculate_totals();
+            $order->save(); // ← CRITICAL: Save to persist
 
             ob_start();
             wc_get_template('admin/meta-boxes/views/html-order-item-taxes.php', ['item' => $item]);
@@ -535,6 +541,7 @@ class Admin_Order {
 
         error_log("[COUPON DEBUG] Items subtotal before final calc (AJAX): " . $order->get_subtotal());
         $order->calculate_totals();
+        $order->save(); // ← CRITICAL: Save to persist
 
         ob_start();
         wc_get_template('admin/meta-boxes/views/html-order-item-taxes.php', ['item' => $item]);
