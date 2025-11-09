@@ -4,6 +4,7 @@
  *
  * Sends HTML email to assigned sales reps when order status changes to Processing.
  * Groups items by warehouse → sales rep (via term meta).
+ * Now includes billing phone in shipping address section.
  *
  * @package Gunsafes_Core
  */
@@ -139,6 +140,10 @@ class GScore_Dropship_Notifier {
         $shipping = $order->get_address('shipping');
         $customer_email = $billing['email'] ?? '';
 
+        // Get billing phone — always available
+        $billing_phone = $billing['phone'] ?? '';
+        $shipping_phone = $shipping['phone'] ?? '';
+
         $items_by_rep = [];
 
         foreach ($order->get_items() as $item_id => $item) {
@@ -199,8 +204,8 @@ class GScore_Dropship_Notifier {
                     <div>Address Line 2: <?php echo esc_html($billing['address_2']); ?></div>
                 <?php endif; ?>
                 <div>City/State/Postal Code: <?php echo esc_html(($billing['city'] ?? '') . ', ' . ($billing['state'] ?? '') . ' ' . ($billing['postcode'] ?? '')); ?></div>
-                <?php if (!empty($billing['phone'])): ?>
-                    <div>Phone Number: <?php echo esc_html($billing['phone']); ?></div>
+                <?php if (!empty($billing_phone)): ?>
+                    <div>Phone Number: <?php echo esc_html($billing_phone); ?></div>
                 <?php endif; ?>
 
                 <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;">
@@ -211,9 +216,10 @@ class GScore_Dropship_Notifier {
                     <div>Address Line 2: <?php echo esc_html($shipping['address_2']); ?></div>
                 <?php endif; ?>
                 <div>City/State/Postal Code: <?php echo esc_html(($shipping['city'] ?? '') . ', ' . ($shipping['state'] ?? '') . ' ' . ($shipping['postcode'] ?? '')); ?></div>
-                <?php if (!empty($shipping['phone'])): ?>
-                    <div>Phone Number: <?php echo esc_html($shipping['phone']); ?></div>
-                <?php endif; ?>
+                
+                <!-- Always show phone: prefer shipping phone, fallback to billing -->
+                <div>Phone Number: <?php echo esc_html(!empty($shipping_phone) ? $shipping_phone : $billing_phone); ?> <?php echo empty($shipping_phone) && !empty($billing_phone) ? ' (Billing Phone)' : ''; ?></div>
+                
                 <?php if (!empty($customer_email)): ?>
                     <div style="margin-top:10px;">Customer Email: <?php echo esc_html($customer_email); ?></div>
                 <?php endif; ?>
