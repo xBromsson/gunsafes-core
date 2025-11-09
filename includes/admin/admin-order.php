@@ -29,6 +29,7 @@ class Admin_Order {
         add_action( 'woocommerce_saved_order_items', [ $this, 'preserve_coupons_before_save' ], 5, 2 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'save_order_item_addons' ], 100, 2 );
         add_action( 'woocommerce_saved_order_items', [ $this, 'save_order_item_addons' ], 20, 2 );
+        add_action( 'woocommerce_process_shop_order_meta', [ $this, 'force_recalculate_after_addons' ], 101, 2 );
         add_action( 'wp_ajax_save_order_item_addons', [ $this, 'ajax_save_order_item_addons' ] );
         add_filter( 'woocommerce_shipping_methods', [ $this, 'add_flexible_shipping_instances' ] );
         add_action( 'woocommerce_saved_order_items', [ $this, 'update_shipping_name' ], 10, 2 );
@@ -309,7 +310,7 @@ class Admin_Order {
                 $item->set_subtotal( $new_subtotal );
                 $item->set_total( $new_subtotal );
 
-                $tax_data = $item->calculate_taxes();   // ONE tax calc
+                $tax_data = $item->calculate_taxes();
                 $item->set_taxes( $tax_data );
                 $item->save();
                 continue;
@@ -349,7 +350,7 @@ class Admin_Order {
             $item->set_subtotal( $new_subtotal );
             $item->set_total( $new_subtotal );
 
-            $tax_data = $item->calculate_taxes();   // ONE tax calc
+            $tax_data = $item->calculate_taxes();
             $item->set_taxes( $tax_data );
             $item->save();
         }
@@ -374,8 +375,43 @@ class Admin_Order {
             delete_post_meta( $order_id, '_temp_coupon_backup' );
         }
 
-        // **DO NOT** call $order->calculate_totals() here.
-        // WooCommerce runs it automatically when the meta box is saved.
+        // Re-calculate totals if triggered via saved_order_items (AJAX save button)
+        if ( current_filter() === 'woocommerce_saved_order_items' ) {
+            $order->calculate_taxes();
+            $order->calculate_totals( false );
+        }
+
+        // **DO NOT** call calculate_totals here on process_shop_order_meta
+        // That's handled by force_recalculate_after_addons at priority 101
+    }
+
+    /**
+     * Force full recalculation after add-ons during main "Update" button
+     */
+    public function force_recalculate_after_addons( $post_id, $post ) {
+        $order = wc_get_order( $post_id );
+        if ( ! $order ) {
+            return;
+        }
+
+        $has_addons = false;
+        foreach ( $order->get_items() as $item ) {
+            if ( $item->get_type() === 'line_item' ) {
+                $product = $item->get_product();
+                if ( $product && ! empty( $this->get_apf_fields_for_product( $product ) ) ) {
+                    $has_addons = true;
+                    break;
+                }
+            }
+        }
+
+        $backup_exists = ! empty( get_post_meta( $post_id, '_temp_coupon_backup', true ) );
+
+        if ( $has_addons || $backup_exists ) {
+            $order->calculate_taxes();
+            $order->calculate_totals( false );
+            delete_post_meta( $post_id, '_temp_coupon_backup' );
+        }
     }
 
     public function ajax_save_order_item_addons(): void {
@@ -449,10 +485,8 @@ class Admin_Order {
             $item->set_taxes( $tax_data );
             $item->save();
 
-            // coupon restore (same as normal flow)
             $this->restore_coupons_ajax( $order_id );
 
-            // return HTML
             ob_start();
             wc_get_template( 'admin/meta-boxes/views/html-order-item-taxes.php', [ 'item' => $item ] );
             $response['html']      = ob_get_clean();
@@ -494,10 +528,8 @@ class Admin_Order {
         $item->set_taxes( $tax_data );
         $item->save();
 
-        // coupon restore
         $this->restore_coupons_ajax( $order_id );
 
-        // return HTML
         ob_start();
         wc_get_template( 'admin/meta-boxes/views/html-order-item-taxes.php', [ 'item' => $item ] );
         $response['html']      = ob_get_clean();
@@ -507,7 +539,6 @@ class Admin_Order {
         wp_send_json( $response );
     }
 
-    /** Helper used by both normal & AJAX flows */
     private function restore_coupons_ajax( $order_id ) {
         $backup_codes = get_post_meta( $order_id, '_temp_coupon_backup', true );
         if ( empty( $backup_codes ) ) {
@@ -530,7 +561,6 @@ class Admin_Order {
         delete_post_meta( $order_id, '_temp_coupon_backup' );
     }
 
-    /** Parse $_POST into the same shape used by normal flow */
     private function parse_addons_post_data() {
         $addons_post = [];
         if ( isset( $_POST['order_item_addons'] ) && is_array( $_POST['order_item_addons'] ) ) {
@@ -544,7 +574,6 @@ class Admin_Order {
         return $addons_post;
     }
 
-    /** Helper to format add-on display text */
     private function format_addon_display( $value, $field ) {
         $formatted = [];
         $type      = $field['type'];
@@ -596,7 +625,6 @@ class Admin_Order {
         foreach ( $order->get_items( 'shipping' ) as $item ) {
             $this->calculate_and_update_shipping_item( $item, $order );
         }
-        // **DO NOT** call $order->calculate_totals() here
     }
 
     public function handle_new_order_item( $item_id, $item, $order_id ): void {
@@ -986,3 +1014,6 @@ class Admin_Order {
         }
     }
 }
+
+// Initialize the class
+new Admin_Order();
