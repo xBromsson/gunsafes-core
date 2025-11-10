@@ -24,7 +24,7 @@ class GScore_BCC_Settings {
             'woocommerce',                     // <--- CHANGED
             'BCC Email Settings',
             'BCC Emails',
-            'manage_options',
+            'manage_woocommerce',
             'gscore-bcc-settings',
             [ $this, 'render_page' ]
         );
