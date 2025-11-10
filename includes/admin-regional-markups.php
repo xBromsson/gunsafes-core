@@ -31,6 +31,10 @@ class GScore_Regional_Markups_Settings {
     }
 
     public function register_settings() {
+        add_filter('option_page_capability_gscore_regional_group', function () {
+            return 'manage_woocommerce';
+        });
+
         // Register two separate options for ZIP and STATE
         register_setting( 
             'gscore_regional_group', 
@@ -38,7 +42,7 @@ class GScore_Regional_Markups_Settings {
             [ $this, 'sanitize_zip' ], 
             'manage_woocommerce' 
         );
-        
+
         register_setting( 
             'gscore_regional_group', 
             'gscore_regional_markups_state', 

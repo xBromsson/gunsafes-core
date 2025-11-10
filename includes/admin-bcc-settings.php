@@ -31,6 +31,10 @@ class GScore_BCC_Settings {
     }
 
     public function register_settings() {
+        add_filter('option_page_capability_gscore_bcc_group', function () {
+            return 'manage_woocommerce';
+        });
+
         register_setting( 
             'gscore_bcc_group', 
             $this->option_name, 
