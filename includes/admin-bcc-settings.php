@@ -31,7 +31,12 @@ class GScore_BCC_Settings {
     }
 
     public function register_settings() {
-        register_setting( 'gscore_bcc_group', $this->option_name, [ $this, 'sanitize' ] );
+        register_setting( 
+            'gscore_bcc_group', 
+            $this->option_name, 
+            [ $this, 'sanitize' ], 
+            'manage_woocommerce' 
+        );
 
         add_settings_section(
             'main_section',
