@@ -18,6 +18,9 @@ class Admin_Order {
             return;
         }
         $this->register();
+
+        add_filter( 'woocommerce_admin_billing_fields',  [ $this, 'default_country_to_us' ] );
+        add_filter( 'woocommerce_admin_shipping_fields', [ $this, 'default_country_to_us' ] );
     }
 
     public function register(): void {
@@ -64,6 +67,17 @@ class Admin_Order {
         $hook = current_filter();
         error_log( "[COUPON DEBUG] Backup saved via {$hook} for order {$post_id}: " . count( $coupon_codes ) . ' coupons' );
     }
+
+    /* --------------------------------------------------------------------- */
+    /*  DEFAULT ADMIN ORDER SCREEN ADDRESSES TO USA                          */
+    /* --------------------------------------------------------------------- */
+
+    public function default_country_to_us( $fields ) {
+    if ( empty( $fields['country']['value'] ) ) {
+        $fields['country']['value'] = 'US';
+    }
+    return $fields;
+}
 
     /* --------------------------------------------------------------------- */
     /*  SHIPPING MARKUP HELPERS                                            */
@@ -946,7 +960,8 @@ class Admin_Order {
             wp_enqueue_style( 'gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/css/admin.css', [], GUNSAFES_CORE_VER );
             wp_enqueue_script( 'gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/js/admin.js', [ 'jquery' ], GUNSAFES_CORE_VER, true );
 
-            $js = "
+            // Your existing add-ons JS (unchanged)
+            $addons_js = "
             jQuery(document).ready(function($){
                 function moveAddons(){
                     $('tr.item').each(function(){
@@ -999,8 +1014,9 @@ class Admin_Order {
                 });
             });
             ";
-            wp_add_inline_script( 'gunsafes-core-order', $js );
+            wp_add_inline_script( 'gunsafes-core-order', $addons_js );
 
+            // Your CSS (unchanged)
             $css = '
             th.item_addons, td.item_addons { display:none; }
             .addons-row td { padding:10px; background:#f8f8f8; border-top:1px solid #ddd; }
