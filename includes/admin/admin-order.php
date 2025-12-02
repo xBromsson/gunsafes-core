@@ -46,6 +46,8 @@ class Admin_Order {
         add_filter( 'woocommerce_email_enabled_customer_processing_order', [ $this, 'disable_emails_for_quote' ], 10, 2 );
         add_filter( 'woocommerce_email_enabled_customer_quote', [ $this, 'disable_emails_for_quote' ], 10, 2 );
         add_filter( 'woocommerce_email_enabled_admin_quote', [ $this, 'disable_emails_for_quote' ], 10, 2 );
+        add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'custom_single_add_to_cart_text' ], 20, 2 );
+        add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'custom_loop_add_to_cart_text' ],     20, 2 );
     }
 
     /* --------------------------------------------------------------------- */
@@ -823,6 +825,53 @@ class Admin_Order {
             <?php
         }
         echo '</td>';
+    }
+
+    /**
+     * Single product page – Add to Cart button text
+     */
+    public function custom_single_add_to_cart_text( $text, $product ) {
+
+        // Change these to whatever you want
+        $normal_text       = 'Buy Now';          // simple products
+        $customizable_text = 'Buy Now';      // APF or variable products
+
+        // 1. APF / WAPF products (reuses your existing method)
+        if ( ! empty( $this->get_apf_fields_for_product( $product ) ) ) {
+            return $customizable_text;
+        }
+
+        // 2. Variable products (optional – remove this block if you want them to say "Add to Cart")
+        if ( $product->is_type( 'variable' ) ) {
+            return $customizable_text;
+        }
+
+        // 3. Everything else
+        return $normal_text;
+    }
+
+    /**
+     * Shop / archive / grid – button text
+     */
+    public function custom_loop_add_to_cart_text( $text, $product ) {
+
+        // Change these to whatever you want
+        $normal_text     = 'Buy Now';           // simple
+        $variable_text   = 'Buy Now';        // variable
+        $apf_text        = 'Buy Now';     // APF/WAPF products
+
+        // Highest priority: APF products
+        if ( ! empty( $this->get_apf_fields_for_product( $product ) ) ) {
+            return $apf_text;
+        }
+
+        // Variable products
+        if ( $product->is_type( 'variable' ) ) {
+            return $variable_text;
+        }
+
+        // Simple products
+        return $normal_text;
     }
 
     /* --------------------------------------------------------------------- */
