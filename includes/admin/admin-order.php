@@ -150,7 +150,7 @@ class Admin_Order {
         $selected_sales_rep = $saved_sales_rep ?: 'N/A';
 
         $client_users = get_users( [
-            'role'   => 'client',
+            'role'   => 'sales_rep',
             'fields' => [ 'ID', 'user_login', 'display_name' ],
         ] );
         $users_to_show = $client_users;
