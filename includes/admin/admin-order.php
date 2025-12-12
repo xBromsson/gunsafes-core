@@ -1080,5 +1080,6 @@ class Admin_Order {
     }
 }
 
-// Initialize the class
-new Admin_Order();
+// commenting out because instantiating in my gunsafes core file
+// // Initialize the class
+// new Admin_Order();
