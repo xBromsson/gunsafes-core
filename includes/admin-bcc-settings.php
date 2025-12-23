@@ -14,14 +14,19 @@ class GScore_BCC_Settings {
     private $option_name = 'gscore_bcc_emails';
 
     public function __construct() {
-        add_action( 'admin_menu', [ $this, 'add_settings_page' ] );
+        // Add submenu very late – after WooCommerce has registered its top-level menu
+        add_action( 'admin_menu', [ $this, 'add_settings_page' ], 999 );
+
+        // Register settings on admin_init
         add_action( 'admin_init', [ $this, 'register_settings' ] );
     }
 
+    /**
+     * Add submenu under the top-level WooCommerce menu
+     */
     public function add_settings_page() {
-        // Parent = WooCommerce
         add_submenu_page(
-            'woocommerce',                     // <--- CHANGED
+            'woocommerce',                     // Parent slug – top-level WooCommerce menu
             'BCC Email Settings',
             'BCC Emails',
             'manage_woocommerce',
@@ -30,16 +35,19 @@ class GScore_BCC_Settings {
         );
     }
 
+    /**
+     * Register the setting, section, and field
+     */
     public function register_settings() {
-        add_filter('option_page_capability_gscore_bcc_group', function () {
+        // Restrict who can save this option
+        add_filter( 'option_page_capability_gscore_bcc_group', function() {
             return 'manage_woocommerce';
-        });
+        } );
 
-        register_setting( 
-            'gscore_bcc_group', 
-            $this->option_name, 
-            [ $this, 'sanitize' ], 
-            'manage_woocommerce' 
+        register_setting(
+            'gscore_bcc_group',
+            $this->option_name,
+            [ $this, 'sanitize' ]
         );
 
         add_settings_section(
@@ -58,30 +66,45 @@ class GScore_BCC_Settings {
         );
     }
 
+    /**
+     * Sanitize input – only keep valid email addresses
+     */
     public function sanitize( $input ) {
         $sanitized = '';
+
         if ( is_string( $input ) ) {
             $lines = array_filter( array_map( 'trim', explode( "\n", $input ) ) );
             $valid = [];
+
             foreach ( $lines as $email ) {
                 if ( is_email( $email ) ) {
-                    $valid[] = $email;
+                    $valid[] = sanitize_email( $email );
                 }
             }
+
             $sanitized = implode( "\n", $valid );
         }
+
         return $sanitized;
     }
 
+    /**
+     * Field output
+     */
     public function field_callback() {
         $value = get_option( $this->option_name, "marvin@codeblueprint.co\nsales@gunsafes.com" );
         ?>
-        <textarea name="<?php echo esc_attr( $this->option_name ); ?>" rows="6" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
-        <p class="description">Enter one email address per line. Only valid emails will be saved.<br><br>These emails will receive 
-        copies of all customer related email notifications for example shipping notifications, order notifications, etc.</p>
+        <textarea name="<?php echo esc_attr( $this->option_name ); ?>" rows="8" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
+        <p class="description">
+            Enter one email address per line. Only valid emails will be saved.<br><br>
+            These emails will receive BCC copies of all customer-related WooCommerce notifications (order confirmations, shipping updates, etc.).
+        </p>
         <?php
     }
 
+    /**
+     * Render the settings page
+     */
     public function render_page() {
         ?>
         <div class="wrap">
@@ -90,7 +113,7 @@ class GScore_BCC_Settings {
                 <?php
                 settings_fields( 'gscore_bcc_group' );
                 do_settings_sections( 'gscore-bcc-settings' );
-                submit_button();
+                submit_button( 'Save BCC Emails' );
                 ?>
             </form>
         </div>
@@ -98,9 +121,10 @@ class GScore_BCC_Settings {
     }
 }
 
-// Initialize
-add_action( 'plugins_loaded', function() {
-    if ( is_admin() ) {
-        new GScore_BCC_Settings();
+// Instantiate on admin_menu with high priority (after WooCommerce menu is registered)
+add_action( 'admin_menu', function() {
+    static $instance = null;
+    if ( $instance === null ) {
+        $instance = new GScore_BCC_Settings();
     }
-} );
+}, 998 );

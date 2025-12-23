@@ -11,17 +11,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class GScore_Regional_Markups_Settings {
 
-    private $option_name = 'gscore_regional_markups';
-
     public function __construct() {
-        add_action( 'admin_menu', [ $this, 'add_settings_page' ] );
+        // Add the submenu VERY late (after WooCommerce registers its parent menu)
+        add_action( 'admin_menu', [ $this, 'add_settings_page' ], 999 );
+
+        // Register settings and ensure defaults on admin_init
         add_action( 'admin_init', [ $this, 'register_settings' ] );
-        add_action( 'admin_init', [ $this, 'ensure_defaults' ] ); // NEW
+        add_action( 'admin_init', [ $this, 'ensure_defaults' ] );
     }
 
+    /**
+     * Add submenu under the top-level WooCommerce menu
+     */
     public function add_settings_page() {
+        // Debug: confirm this method runs
+        error_log( 'GScore_Regional_Markups_Settings: add_settings_page() executed – adding submenu' );
+
         add_submenu_page(
-            'woocommerce',
+            'woocommerce',                          // Parent slug – correct for top-level WooCommerce menu
             'Regional Shipping Markups',
             'Regional Shipping Markups',
             'manage_woocommerce',
@@ -30,24 +37,25 @@ class GScore_Regional_Markups_Settings {
         );
     }
 
+    /**
+     * Register settings, sections, and fields
+     */
     public function register_settings() {
-        add_filter('option_page_capability_gscore_regional_group', function () {
+        // Restrict who can save these options
+        add_filter( 'option_page_capability_gscore_regional_group', function() {
             return 'manage_woocommerce';
-        });
+        } );
 
-        // Register two separate options for ZIP and STATE
-        register_setting( 
-            'gscore_regional_group', 
-            'gscore_regional_markups_zip', 
-            [ $this, 'sanitize_zip' ], 
-            'manage_woocommerce' 
+        register_setting(
+            'gscore_regional_group',
+            'gscore_regional_markups_zip',
+            [ $this, 'sanitize_zip' ]
         );
 
-        register_setting( 
-            'gscore_regional_group', 
-            'gscore_regional_markups_state', 
-            [ $this, 'sanitize_state' ], 
-            'manage_woocommerce' 
+        register_setting(
+            'gscore_regional_group',
+            'gscore_regional_markups_state',
+            [ $this, 'sanitize_state' ]
         );
 
         add_settings_section(
@@ -81,15 +89,16 @@ class GScore_Regional_Markups_Settings {
         );
     }
 
-    // NEW: Ensure defaults exist on first load
+    /**
+     * Ensure default values exist in the database
+     */
     public function ensure_defaults() {
         if ( false === get_option( 'gscore_regional_markups_zip' ) ) {
-            $defaults = $this->get_default_zip();
-            update_option( 'gscore_regional_markups_zip', $this->array_to_text( $defaults ) );
+            update_option( 'gscore_regional_markups_zip', $this->array_to_text( $this->get_default_zip() ) );
         }
+
         if ( false === get_option( 'gscore_regional_markups_state' ) ) {
-            $defaults = $this->get_default_state();
-            update_option( 'gscore_regional_markups_state', $this->array_to_text( $defaults ) );
+            update_option( 'gscore_regional_markups_state', $this->array_to_text( $this->get_default_state() ) );
         }
     }
 
@@ -102,15 +111,19 @@ class GScore_Regional_Markups_Settings {
     }
 
     private function sanitize_text( $input, $pattern ) {
+        if ( ! is_string( $input ) ) {
+            return '';
+        }
+
         $lines = array_filter( array_map( 'trim', explode( "\n", $input ) ) );
         $valid = [];
+
         foreach ( $lines as $line ) {
             if ( preg_match( $pattern, $line, $m ) ) {
-                $key = $m[1];
-                $value = (float) $m[2];
-                $valid[ $key ] = $value;
+                $valid[ $m[1] ] = (float) $m[2];
             }
         }
+
         return $this->array_to_text( $valid );
     }
 
@@ -125,16 +138,16 @@ class GScore_Regional_Markups_Settings {
     public function zip_field() {
         $value = get_option( 'gscore_regional_markups_zip', $this->array_to_text( $this->get_default_zip() ) );
         ?>
-        <textarea name="gscore_regional_markups_zip" rows="8" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
-        <p class="description">Example: <code>07876 20</code> → 20% markup</p>
+        <textarea name="gscore_regional_markups_zip" rows="10" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
+        <p class="description">Example: <code>07876 20</code> → 20% markup (percent sign optional)</p>
         <?php
     }
 
     public function state_field() {
         $value = get_option( 'gscore_regional_markups_state', $this->array_to_text( $this->get_default_state() ) );
         ?>
-        <textarea name="gscore_regional_markups_state" rows="8" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
-        <p class="description">Example: <code>NJ 20</code> → 20% markup</p>
+        <textarea name="gscore_regional_markups_state" rows="10" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
+        <p class="description">Example: <code>NJ 20</code> → 20% markup (percent sign optional)</p>
         <?php
     }
 
@@ -145,7 +158,7 @@ class GScore_Regional_Markups_Settings {
             '80435' => 30.0, '80438' => 30.0, '80442' => 30.0, '80443' => 30.0,
             '80446' => 30.0, '80447' => 30.0, '80451' => 30.0, '80452' => 30.0,
             '80459' => 30.0, '80468' => 30.0, '80473' => 30.0, '80478' => 30.0,
-            '80482' => 30.0
+            '80482' => 30.0,
         ];
     }
 
@@ -154,7 +167,7 @@ class GScore_Regional_Markups_Settings {
             'NJ' => 20.0, 'NY' => 20.0, 'VT' => 25.0, 'RI' => 25.0, 'CO' => 30.0,
             'ME' => 25.0, 'NH' => 25.0, 'CT' => 25.0, 'VA' => 25.0, 'ND' => 35.0,
             'WI' => 65.0, 'WY' => 30.0, 'CA' => 75.0, 'MA' => 40.0, 'MT' => 75.0,
-            'AL' => 30.0, 'MD' => 20.0, 'MI' => 150.0, 'UT' => 100.0, 'IL' => 50.0
+            'AL' => 30.0, 'MD' => 20.0, 'MI' => 150.0, 'UT' => 100.0, 'IL' => 50.0,
         ];
     }
 
@@ -166,7 +179,7 @@ class GScore_Regional_Markups_Settings {
                 <?php
                 settings_fields( 'gscore_regional_group' );
                 do_settings_sections( 'gscore-regional-markups' );
-                submit_button();
+                submit_button( 'Save Markups' );
                 ?>
             </form>
         </div>
@@ -174,8 +187,11 @@ class GScore_Regional_Markups_Settings {
     }
 }
 
-add_action( 'plugins_loaded', function() {
-    if ( is_admin() ) {
-        new GScore_Regional_Markups_Settings();
+// Instantiate the class on admin_menu with a high priority (after WooCommerce adds its menu)
+add_action( 'admin_menu', function() {
+    static $instance = null;
+    if ( $instance === null ) {
+        error_log( 'GScore_Regional_Markups_Settings: Class instantiated successfully' );
+        $instance = new GScore_Regional_Markups_Settings();
     }
-} );
+}, 998 );
