@@ -48,6 +48,7 @@ class Admin_Order {
         add_filter( 'woocommerce_email_enabled_admin_quote', [ $this, 'disable_emails_for_quote' ], 10, 2 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'custom_single_add_to_cart_text' ], 20, 2 );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'custom_loop_add_to_cart_text' ],     20, 2 );
+        add_action( 'woocommerce_before_save_order_items', [ $this, 'detect_manual_shipping_override' ], 10, 2 );
     }
 
     /* --------------------------------------------------------------------- */
@@ -75,11 +76,66 @@ class Admin_Order {
     /* --------------------------------------------------------------------- */
 
     public function default_country_to_us( $fields ) {
-    if ( empty( $fields['country']['value'] ) ) {
-        $fields['country']['value'] = 'US';
+        if ( empty( $fields['country']['value'] ) ) {
+            $fields['country']['value'] = 'US';
+        }
+        return $fields;
     }
-    return $fields;
-}
+
+    /**
+     * Detect manual shipping cost edits using raw $_POST (since $items['shipping'] is often empty in admin AJAX saves)
+     */
+    public function detect_manual_shipping_override( $order_id, $items ) {
+        error_log( "===== [SHIPPING DEBUG] woocommerce_before_save_order_items fired for order #{$order_id} =====" );
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            error_log( "[SHIPPING DEBUG] Order #{$order_id} not found!" );
+            return;
+        }
+
+        // Log raw POST for debugging (remove or comment out after testing)
+        error_log( "[SHIPPING DEBUG] Raw _POST shipping_cost: " . print_r( $_POST['shipping_cost'] ?? [], true ) );
+
+        $posted_shipping_costs = $_POST['shipping_cost'] ?? [];   // This is the key field WooCommerce uses for shipping edits
+
+        $shipping_items = $order->get_items( 'shipping' );
+        if ( empty( $shipping_items ) ) {
+            error_log( "[SHIPPING DEBUG] No shipping items found in order." );
+            return;
+        }
+
+        foreach ( $shipping_items as $item_id => $item ) {
+            $method_id = $item->get_method_id();
+            if ( strpos( $method_id, 'flexible_shipping_' ) !== 0 ) {
+                error_log( "[SHIPPING DEBUG] Skipping non-flexible item #{$item_id} (method: {$method_id})" );
+                continue;
+            }
+
+            $current_cost = wc_format_decimal( $item->get_total(), '' );
+            error_log( "[SHIPPING DEBUG] Item #{$item_id} - Current total before save: {$current_cost}" );
+
+            if ( ! isset( $posted_shipping_costs[ $item_id ] ) ) {
+                error_log( "[SHIPPING DEBUG] Item #{$item_id} - No posted shipping_cost in _POST (no manual edit?)" );
+                continue;
+            }
+
+            $posted_cost_raw = $posted_shipping_costs[ $item_id ];
+            $posted_cost = wc_format_decimal( $posted_cost_raw, '' );
+
+            error_log( "[SHIPPING DEBUG] Item #{$item_id} - Posted shipping cost from _POST: {$posted_cost} (raw: {$posted_cost_raw})" );
+
+            if ( $posted_cost != $current_cost ) {
+                error_log( "[SHIPPING DEBUG] MANUAL EDIT DETECTED for item #{$item_id}! Setting override meta to {$posted_cost}" );
+                $item->update_meta_data( '_manual_shipping_override', $posted_cost );
+                $item->save();  // Save meta immediately
+            } else {
+                error_log( "[SHIPPING DEBUG] Posted cost matches current - no override needed" );
+            }
+        }
+
+        error_log( "===== [SHIPPING DEBUG] Detection complete for order #{$order_id} =====" );
+    }
 
     /* --------------------------------------------------------------------- */
     /*  SHIPPING MARKUP HELPERS                                            */
@@ -655,7 +711,9 @@ class Admin_Order {
     }
 
     private function calculate_and_update_shipping_item( WC_Order_Item_Shipping $item, WC_Order $order ): void {
+        $item_id   = $item->get_id();
         $method_id = $item->get_method_id();
+
         if ( strpos( $method_id, 'flexible_shipping_' ) !== 0 ) {
             return;
         }
@@ -672,11 +730,9 @@ class Admin_Order {
         }
 
         $contents = $this->get_order_contents( $order );
-        if ( empty( $contents ) ) {
-            $calculated_cost = 0.0;
-            $calculated_taxes = [ 'total' => [] ];
-            $label = $settings['title'];
-        } else {
+        $calculated_cost = 0.0;
+
+        if ( ! empty( $contents ) ) {
             $package = [
                 'contents'       => $contents,
                 'contents_cost'  => array_sum( wp_list_pluck( $contents, 'line_total' ) ),
@@ -692,25 +748,37 @@ class Admin_Order {
                 ],
             ];
             $shipping_method->calculate_shipping( $package );
-            $rates = $shipping_method->rates;
-
-            $calculated_cost  = 0.0;
-            $calculated_taxes = [ 'total' => [] ];
-            $label            = $settings['title'];
+            $rates = $shipping_method->rates ?? [];
 
             if ( ! empty( $rates ) ) {
-                $rate            = reset( $rates );
+                $rate = reset( $rates );
                 $calculated_cost = (float) $rate->cost;
-                $calculated_taxes = [ 'total' => $rate->taxes ];
-                $label           = $rate->label;
             }
 
             $calculated_cost = $this->apply_regional_shipping_markups( $calculated_cost, $package );
+        }
 
-            if ( $shipping_method->tax_status === 'taxable' ) {
-                $tax_rates        = WC_Tax::get_shipping_tax_rates();
-                $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $calculated_cost, $tax_rates, false ) ];
-            }
+        $current_total = (float) $item->get_total();
+        $tolerance     = 0.01;
+
+        // If meaningfully different → assume manual override, keep current value
+        if ( abs( $current_total - $calculated_cost ) > $tolerance ) {
+            return;
+        }
+
+        // Safe to apply calculated values
+        $calculated_taxes = [ 'total' => [] ];
+        $label = $settings['title'];
+
+        if ( ! empty( $rates ) ) {
+            $rate = reset( $rates );
+            $label = $rate->label;
+            $calculated_taxes = [ 'total' => $rate->taxes ];
+        }
+
+        if ( $shipping_method->tax_status === 'taxable' ) {
+            $tax_rates = WC_Tax::get_shipping_tax_rates();
+            $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $calculated_cost, $tax_rates, false ) ];
         }
 
         $item->set_total( $calculated_cost );
