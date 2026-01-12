@@ -298,8 +298,8 @@ class Admin_Order {
         $zip_text   = get_option( 'gscore_regional_markups_zip', '' );
         $state_text = get_option( 'gscore_regional_markups_state', '' );
 
-        $zip_markups   = $this->text_to_array( $zip_text, $this->get_default_zip() );
-        $state_markups = $this->text_to_array( $state_text, $this->get_default_state() );
+        $zip_markups   = $zip_text === '' ? [] : $this->text_to_array( $zip_text, $this->get_default_zip() );
+        $state_markups = $state_text === '' ? [] : $this->text_to_array( $state_text, $this->get_default_state() );
 
         $state    = $package['destination']['state'] ?? '';
         $postcode = $package['destination']['postcode'] ?? '';
