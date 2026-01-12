@@ -103,7 +103,7 @@ class Admin_Order {
         // Log raw POST for debugging (remove or comment out after testing)
         error_log( "[SHIPPING DEBUG] Raw _POST shipping_cost: " . print_r( $_POST['shipping_cost'] ?? [], true ) );
 
-        $posted_shipping_costs = $_POST['shipping_cost'] ?? [];   // This is the key field WooCommerce uses for shipping edits
+        $posted_shipping_costs = $this->get_posted_shipping_costs();   // This is the key field WooCommerce uses for shipping edits
 
         $shipping_items = $order->get_items( 'shipping' );
         if ( empty( $shipping_items ) ) {
@@ -111,29 +111,73 @@ class Admin_Order {
             return;
         }
 
+        $shipping_item_ids = array_keys( $shipping_items );
+        $manual_flags = $this->get_posted_manual_shipping_override_flags();
+        $fallback_costs = [];
+        foreach ( $posted_shipping_costs as $posted_key => $posted_value ) {
+            if ( is_string( $posted_key ) && ! ctype_digit( $posted_key ) ) {
+                $fallback_costs[] = $posted_value;
+            } elseif ( is_numeric( $posted_key ) && ! in_array( (int) $posted_key, $shipping_item_ids, true ) ) {
+                $fallback_costs[] = $posted_value;
+            }
+        }
+
+        $posted_methods = $this->get_posted_shipping_methods();
+        $fallback_methods = [];
+        foreach ( $posted_methods as $posted_key => $posted_value ) {
+            if ( is_string( $posted_key ) && ! ctype_digit( $posted_key ) ) {
+                $fallback_methods[] = $posted_value;
+            } elseif ( is_numeric( $posted_key ) && ! in_array( (int) $posted_key, $shipping_item_ids, true ) ) {
+                $fallback_methods[] = $posted_value;
+            }
+        }
+
         foreach ( $shipping_items as $item_id => $item ) {
             $method_id = $item->get_method_id();
-            if ( strpos( $method_id, 'flexible_shipping_' ) !== 0 ) {
-                error_log( "[SHIPPING DEBUG] Skipping non-flexible item #{$item_id} (method: {$method_id})" );
+            $posted_method_id = $posted_methods[ $item_id ] ?? null;
+            if ( $posted_method_id === null && count( $fallback_methods ) === 1 && count( $shipping_items ) === 1 ) {
+                $posted_method_id = $fallback_methods[0];
+            }
+            $effective_method_id = $method_id ?: $posted_method_id;
+            if ( $effective_method_id && $effective_method_id !== 'other' ) {
+                $item->set_method_id( $effective_method_id );
+            }
+            if ( ! $effective_method_id || strpos( $effective_method_id, 'flexible_shipping_' ) !== 0 ) {
+                error_log( "[SHIPPING DEBUG] Skipping non-flexible item #{$item_id} (method: {$effective_method_id})" );
                 continue;
             }
 
             $current_cost = wc_format_decimal( $item->get_total(), '' );
             error_log( "[SHIPPING DEBUG] Item #{$item_id} - Current total before save: {$current_cost}" );
 
-            if ( ! isset( $posted_shipping_costs[ $item_id ] ) ) {
+            $posted_cost_raw = $posted_shipping_costs[ $item_id ] ?? null;
+            $manual_flag_for_item = ! empty( $manual_flags[ $item_id ] );
+            if ( ! $manual_flag_for_item && count( $manual_flags ) === 1 && count( $shipping_items ) === 1 ) {
+                $manual_flag_for_item = true;
+            }
+            if ( $posted_cost_raw === null && count( $fallback_costs ) === 1 && count( $shipping_items ) === 1 ) {
+                $posted_cost_raw = $fallback_costs[0];
+                if ( ! $manual_flag_for_item && count( $manual_flags ) === 1 ) {
+                    $manual_flag_for_item = true;
+                }
+            }
+            if ( $posted_cost_raw === null ) {
                 error_log( "[SHIPPING DEBUG] Item #{$item_id} - No posted shipping_cost in _POST (no manual edit?)" );
                 continue;
             }
-
-            $posted_cost_raw = $posted_shipping_costs[ $item_id ];
             $posted_cost = wc_format_decimal( $posted_cost_raw, '' );
 
             error_log( "[SHIPPING DEBUG] Item #{$item_id} - Posted shipping cost from _POST: {$posted_cost} (raw: {$posted_cost_raw})" );
 
-            if ( $posted_cost != $current_cost ) {
+            $tolerance = 0.01;
+
+            if ( $manual_flag_for_item || abs( (float) $posted_cost - (float) $current_cost ) > $tolerance ) {
                 error_log( "[SHIPPING DEBUG] MANUAL EDIT DETECTED for item #{$item_id}! Setting override meta to {$posted_cost}" );
                 $item->update_meta_data( '_manual_shipping_override', $posted_cost );
+                $item->set_total( $posted_cost );
+                $tax_rates = WC_Tax::get_shipping_tax_rates();
+                $taxes = [ 'total' => WC_Tax::calc_tax( $posted_cost, $tax_rates, false ) ];
+                $item->set_taxes( $taxes );
                 $item->save();  // Save meta immediately
             } else {
                 error_log( "[SHIPPING DEBUG] Posted cost matches current - no override needed" );
@@ -1067,26 +1111,137 @@ class Admin_Order {
     }
 
     private function calculate_and_update_shipping_item( WC_Order_Item_Shipping $item, WC_Order $order ): void {
-        $item_id   = $item->get_id();
         $method_id = $item->get_method_id();
+        if ( ! $method_id ) {
+            $posted_methods = $this->get_posted_shipping_methods();
+            if ( ! empty( $posted_methods ) ) {
+                $shipping_item_ids = array_keys( $order->get_items( 'shipping' ) );
+                $fallback_methods = [];
+                foreach ( $posted_methods as $posted_key => $posted_value ) {
+                    if ( is_string( $posted_key ) && ! ctype_digit( $posted_key ) ) {
+                        $fallback_methods[] = $posted_value;
+                    } elseif ( is_numeric( $posted_key ) && ! in_array( (int) $posted_key, $shipping_item_ids, true ) ) {
+                        $fallback_methods[] = $posted_value;
+                    }
+                }
+                $posted_method_id = $posted_methods[ $item->get_id() ] ?? null;
+                if ( $posted_method_id === null && count( $fallback_methods ) === 1 && count( $shipping_item_ids ) === 1 ) {
+                    $posted_method_id = $fallback_methods[0];
+                }
+                if ( $posted_method_id && $posted_method_id !== 'other' ) {
+                    $item->set_method_id( $posted_method_id );
+                }
+            }
+        }
 
-        if ( strpos( $method_id, 'flexible_shipping_' ) !== 0 ) {
+        $calculated = $this->get_calculated_shipping_data( $item, $order );
+        if ( ! $calculated ) {
             return;
+        }
+
+        $calculated_cost  = (float) $calculated['cost'];
+        $calculated_taxes = $calculated['taxes'];
+        $label            = $calculated['label'];
+        $shipping_method  = $calculated['method'];
+
+        $tolerance       = 0.01;
+        $current_total   = (float) $item->get_total();
+        $manual_override = $item->get_meta( '_manual_shipping_override', true );
+
+        $posted_shipping_costs = $this->get_posted_shipping_costs();
+        if ( ! empty( $posted_shipping_costs ) ) {
+            $shipping_item_ids = array_keys( $order->get_items( 'shipping' ) );
+            $manual_flags = $this->get_posted_manual_shipping_override_flags();
+            $fallback_costs = [];
+            foreach ( $posted_shipping_costs as $posted_key => $posted_value ) {
+                if ( is_string( $posted_key ) && ! ctype_digit( $posted_key ) ) {
+                    $fallback_costs[] = $posted_value;
+                } elseif ( is_numeric( $posted_key ) && ! in_array( (int) $posted_key, $shipping_item_ids, true ) ) {
+                    $fallback_costs[] = $posted_value;
+                }
+            }
+
+            $posted_cost_raw = $posted_shipping_costs[ $item->get_id() ] ?? null;
+            $manual_flag_for_item = ! empty( $manual_flags[ $item->get_id() ] );
+            if ( ! $manual_flag_for_item && count( $manual_flags ) === 1 && count( $shipping_item_ids ) === 1 ) {
+                $manual_flag_for_item = true;
+            }
+            if ( $posted_cost_raw === null && count( $fallback_costs ) === 1 && count( $shipping_item_ids ) === 1 ) {
+                $posted_cost_raw = $fallback_costs[0];
+                if ( ! $manual_flag_for_item && count( $manual_flags ) === 1 ) {
+                    $manual_flag_for_item = true;
+                }
+            }
+
+            if ( $posted_cost_raw !== null ) {
+                $posted_cost = (float) wc_format_decimal( $posted_cost_raw, '' );
+                if ( $manual_flag_for_item || abs( $posted_cost - $current_total ) > $tolerance ) {
+                    $item->update_meta_data( '_manual_shipping_override', $posted_cost );
+                    $item->set_total( $posted_cost );
+                    if ( $shipping_method->tax_status === 'taxable' ) {
+                        $tax_rates = WC_Tax::get_shipping_tax_rates();
+                        $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $posted_cost, $tax_rates, false ) ];
+                    }
+                    $item->set_taxes( $calculated_taxes );
+                    if ( $item->get_name() !== $label ) {
+                        $item->set_name( $label );
+                    }
+                    $item->save();
+                    return;
+                }
+                if ( $manual_override === '' ) {
+                    $item->delete_meta_data( '_manual_shipping_override' );
+                }
+            }
+        }
+
+        // If a manual override exists, keep cost but still update the label.
+        if ( $manual_override !== '' ) {
+            $manual_override = (float) wc_format_decimal( $manual_override, '' );
+            if ( abs( $manual_override - $calculated_cost ) <= $tolerance ) {
+                $item->delete_meta_data( '_manual_shipping_override' );
+            } else {
+                $item->set_total( $manual_override );
+                if ( $shipping_method->tax_status === 'taxable' ) {
+                    $tax_rates = WC_Tax::get_shipping_tax_rates();
+                    $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $manual_override, $tax_rates, false ) ];
+                }
+                $item->set_taxes( $calculated_taxes );
+                if ( $item->get_name() !== $label ) {
+                    $item->set_name( $label );
+                }
+                $item->save();
+                return;
+            }
+        }
+
+        // Safe to apply calculated values
+        $item->set_total( $calculated_cost );
+        $item->set_taxes( $calculated_taxes );
+        $item->set_name( $label );
+        $item->save();
+    }
+
+    private function get_calculated_shipping_data( WC_Order_Item_Shipping $item, WC_Order $order ): ?array {
+        $method_id = $item->get_method_id();
+        if ( strpos( $method_id, 'flexible_shipping_' ) !== 0 ) {
+            return null;
         }
 
         $instance_id = (int) str_replace( 'flexible_shipping_', '', $method_id );
         $settings    = get_option( "woocommerce_flexible_shipping_single_{$instance_id}_settings", [] );
         if ( ! isset( $settings['title'] ) ) {
-            return;
+            return null;
         }
 
         $shipping_method = WC_Shipping_Zones::get_shipping_method( $instance_id );
         if ( ! $shipping_method || $shipping_method->id !== 'flexible_shipping_single' ) {
-            return;
+            return null;
         }
 
         $contents = $this->get_order_contents( $order );
         $calculated_cost = 0.0;
+        $rates = [];
 
         if ( ! empty( $contents ) ) {
             $package = [
@@ -1114,17 +1269,8 @@ class Admin_Order {
             $calculated_cost = $this->apply_regional_shipping_markups( $calculated_cost, $package );
         }
 
-        $current_total = (float) $item->get_total();
-        $tolerance     = 0.01;
-
-        // If meaningfully different → assume manual override, keep current value
-        if ( abs( $current_total - $calculated_cost ) > $tolerance ) {
-            return;
-        }
-
-        // Safe to apply calculated values
-        $calculated_taxes = [ 'total' => [] ];
         $label = $settings['title'];
+        $calculated_taxes = [ 'total' => [] ];
 
         if ( ! empty( $rates ) ) {
             $rate = reset( $rates );
@@ -1137,10 +1283,39 @@ class Admin_Order {
             $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $calculated_cost, $tax_rates, false ) ];
         }
 
-        $item->set_total( $calculated_cost );
-        $item->set_taxes( $calculated_taxes );
-        $item->set_name( $label );
-        $item->save();
+        return [
+            'cost'   => $calculated_cost,
+            'taxes'  => $calculated_taxes,
+            'label'  => $label,
+            'method' => $shipping_method,
+        ];
+    }
+
+    private function get_posted_shipping_costs(): array {
+        $posted_shipping_costs = $_POST['shipping_cost'] ?? [];
+        if ( empty( $posted_shipping_costs ) && isset( $_POST['items'] ) && is_string( $_POST['items'] ) ) {
+            parse_str( $_POST['items'], $items_array );
+            $posted_shipping_costs = $items_array['shipping_cost'] ?? [];
+        }
+        return is_array( $posted_shipping_costs ) ? $posted_shipping_costs : [];
+    }
+
+    private function get_posted_shipping_methods(): array {
+        $posted_methods = $_POST['shipping_method'] ?? [];
+        if ( empty( $posted_methods ) && isset( $_POST['items'] ) && is_string( $_POST['items'] ) ) {
+            parse_str( $_POST['items'], $items_array );
+            $posted_methods = $items_array['shipping_method'] ?? [];
+        }
+        return is_array( $posted_methods ) ? $posted_methods : [];
+    }
+
+    private function get_posted_manual_shipping_override_flags(): array {
+        $manual_flags = $_POST['manual_shipping_override'] ?? [];
+        if ( empty( $manual_flags ) && isset( $_POST['items'] ) && is_string( $_POST['items'] ) ) {
+            parse_str( $_POST['items'], $items_array );
+            $manual_flags = $items_array['manual_shipping_override'] ?? [];
+        }
+        return is_array( $manual_flags ) ? $manual_flags : [];
     }
 
     private function get_order_contents( WC_Order $order ): array {
@@ -1428,6 +1603,7 @@ class Admin_Order {
         $hidden[] = '_manual_line_item_override_enabled';
         $hidden[] = '_manual_line_total_override';
         $hidden[] = '_manual_line_subtotal_override';
+        $hidden[] = '_manual_shipping_override';
         return $hidden;
     }
 
@@ -1509,6 +1685,23 @@ class Admin_Order {
                         if(\$subtotal.length && !\$subtotal.data('manual-subtotal')){
                             \$subtotal.val($(this).val());
                         }
+                    }
+                });
+                $('body').on('input change','tr.shipping input.line_total',function(){
+                    var \$row = $(this).closest('tr.shipping');
+                    var item_id = \$row.attr('data-order_item_id');
+                    if(!item_id){
+                        return;
+                    }
+                    var name = 'manual_shipping_override['+item_id+']';
+                    var \$flag = \$row.find('input[name=\"'+name+'\"]');
+                    if(\$flag.length){
+                        \$flag.val('1');
+                        return;
+                    }
+                    var \$target = \$row.find('.line_cost .edit');
+                    if(\$target.length){
+                        \$target.append('<input type=\"hidden\" name=\"'+name+'\" value=\"1\" />');
                     }
                 });
                 $('#woocommerce-order-items').on('woocommerce_order_meta_box_save_line_items_ajax_data', function(e, data){
