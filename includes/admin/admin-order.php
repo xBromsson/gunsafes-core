@@ -41,6 +41,8 @@ class Admin_Order {
         add_action( 'woocommerce_admin_order_item_values', [ $this, 'display_addons_column' ], 10, 3 );
         add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_assets' ] );
         add_filter( 'woocommerce_order_item_quantity', [ $this, 'prevent_stock_reduction_for_quote' ], 10, 3 );
+        add_filter( 'woocommerce_hidden_order_itemmeta', [ $this, 'hide_manual_override_meta' ] );
+        add_action( 'woocommerce_order_before_calculate_totals', [ $this, 'apply_manual_override_before_order_totals' ], 10, 1 );
         add_filter( 'woocommerce_email_enabled_customer_completed_order', [ $this, 'disable_emails_for_quote' ], 10, 2 );
         add_filter( 'woocommerce_email_enabled_new_order', [ $this, 'disable_emails_for_quote' ], 10, 2 );
         add_filter( 'woocommerce_email_enabled_customer_processing_order', [ $this, 'disable_emails_for_quote' ], 10, 2 );
@@ -49,12 +51,16 @@ class Admin_Order {
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'custom_single_add_to_cart_text' ], 20, 2 );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'custom_loop_add_to_cart_text' ],     20, 2 );
         add_action( 'woocommerce_before_save_order_items', [ $this, 'detect_manual_shipping_override' ], 10, 2 );
+        add_action( 'woocommerce_before_save_order_items', [ $this, 'detect_manual_line_item_override' ], 10, 2 );
     }
 
     /* --------------------------------------------------------------------- */
     /*  COUPON BACKUP / RESTORE                                            */
     /* --------------------------------------------------------------------- */
     public function preserve_coupons_before_save( $post_id, $post = null ): void {
+        if ( $this->is_coupon_request() ) {
+            return;
+        }
         $order = wc_get_order( $post_id );
         if ( ! $order ) {
             return;
@@ -135,6 +141,110 @@ class Admin_Order {
         }
 
         error_log( "===== [SHIPPING DEBUG] Detection complete for order #{$order_id} =====" );
+    }
+
+    /**
+     * Detect manual line item price edits and persist overrides for later recalculation.
+     */
+    public function detect_manual_line_item_override( $order_id, $items ) {
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) {
+            return;
+        }
+
+        $posted_totals    = $_POST['line_total'] ?? [];
+        $posted_subtotals = $_POST['line_subtotal'] ?? [];
+        $manual_flags     = $this->get_posted_manual_override_flags();
+        $addons_post      = $this->parse_addons_post_data();
+
+        if ( empty( $posted_totals ) && empty( $posted_subtotals ) && isset( $_POST['items'] ) && is_string( $_POST['items'] ) ) {
+            parse_str( $_POST['items'], $items_array );
+            $posted_totals    = $items_array['line_total'] ?? [];
+            $posted_subtotals = $items_array['line_subtotal'] ?? [];
+        }
+
+        $flag_keys = is_array( $manual_flags ) ? implode( ',', array_keys( $manual_flags ) ) : '';
+        $total_keys = is_array( $posted_totals ) ? implode( ',', array_keys( $posted_totals ) ) : '';
+        $subtotal_keys = is_array( $posted_subtotals ) ? implode( ',', array_keys( $posted_subtotals ) ) : '';
+        error_log( "[LINE ITEM OVERRIDE] Detect start order {$order_id} via " . current_filter() . " flags: {$flag_keys} totals: {$total_keys} subtotals: {$subtotal_keys}" );
+        error_log( "[LINE ITEM OVERRIDE] Raw manual flags: " . wp_json_encode( $manual_flags ) );
+        error_log( "[LINE ITEM OVERRIDE] Raw addons post keys: " . wp_json_encode( array_keys( (array) $addons_post ) ) );
+
+        if ( empty( $posted_totals ) && empty( $posted_subtotals ) ) {
+            return;
+        }
+
+        foreach ( $order->get_items() as $item_id => $item ) {
+            if ( $item->get_type() !== 'line_item' ) {
+                continue;
+            }
+            $product = $item->get_product();
+            if ( ! $product ) {
+                continue;
+            }
+
+            if ( ! isset( $posted_totals[ $item_id ] ) && ! isset( $posted_subtotals[ $item_id ] ) ) {
+                continue;
+            }
+
+            $current_total    = wc_format_decimal( $item->get_total(), '' );
+            $current_subtotal = wc_format_decimal( $item->get_subtotal(), '' );
+
+            $posted_total_raw    = $posted_totals[ $item_id ] ?? $current_total;
+            $posted_subtotal_raw = $posted_subtotals[ $item_id ] ?? $posted_total_raw;
+
+            $posted_total    = wc_format_decimal( $posted_total_raw, '' );
+            $posted_subtotal = wc_format_decimal( $posted_subtotal_raw, '' );
+
+            $manual_flag = ! empty( $manual_flags[ $item_id ] );
+            if ( ! $manual_flag && $posted_total === $current_total && $posted_subtotal === $current_subtotal ) {
+                continue;
+            }
+            if ( ! $manual_flag && $posted_subtotal === $current_subtotal && $posted_total !== $posted_subtotal ) {
+                $posted_subtotal = $posted_total;
+            }
+            $expected    = $this->get_expected_line_totals_from_posted_addons( $item, $product, $addons_post );
+            if ( ! $expected ) {
+                $expected = $this->get_expected_line_totals_from_saved_addons( $item, $product );
+            }
+            $tolerance   = 0.01;
+
+            error_log(
+                "[LINE ITEM OVERRIDE] Item {$item_id} posted total {$posted_total} subtotal {$posted_subtotal} current total {$current_total} subtotal {$current_subtotal}"
+            );
+            if ( $expected ) {
+                error_log(
+                    "[LINE ITEM OVERRIDE] Item {$item_id} expected from addons total {$expected['total']} subtotal {$expected['subtotal']}"
+                );
+            } else {
+                error_log( "[LINE ITEM OVERRIDE] Item {$item_id} expected from addons: none" );
+            }
+
+            $fallback_override = false;
+            if ( ! $manual_flag && $expected ) {
+                if ( abs( (float) $posted_total - (float) $expected['total'] ) > $tolerance
+                    || abs( (float) $posted_subtotal - (float) $expected['subtotal'] ) > $tolerance ) {
+                    $fallback_override = true;
+                }
+            }
+
+            if ( $manual_flag || $fallback_override ) {
+                $this->store_manual_line_item_override( $item, [
+                    'total'    => $posted_total,
+                    'subtotal' => $posted_subtotal,
+                ] );
+                $source = $manual_flag ? 'manual_flag' : 'fallback_expected';
+                error_log( "[LINE ITEM OVERRIDE] Detected manual override ({$source}) for item {$item_id}: total {$posted_total}, subtotal {$posted_subtotal}" );
+            } elseif ( $expected
+                && abs( (float) $posted_total - (float) $expected['total'] ) <= $tolerance
+                && abs( (float) $posted_subtotal - (float) $expected['subtotal'] ) <= $tolerance ) {
+                $this->set_manual_line_item_override_enabled( $item, false );
+                $item->delete_meta_data( '_manual_line_total_override' );
+                $item->delete_meta_data( '_manual_line_subtotal_override' );
+                $item->save();
+                error_log( "[LINE ITEM OVERRIDE] Cleared manual override for item {$item_id}" );
+            }
+        }
     }
 
     /* --------------------------------------------------------------------- */
@@ -355,6 +465,9 @@ class Admin_Order {
             }
 
             $fields = $this->get_apf_fields_for_product( $product );
+            $manual_override = $this->is_manual_line_item_override_enabled( $item )
+                ? $this->get_manual_line_item_override( $item )
+                : null;
 
             // ---- 1. Remove old add-on meta & calculate previous cost (for logging) ----
             $previous_addon_cost = 0.0;
@@ -375,6 +488,10 @@ class Admin_Order {
 
             // ---- 2. No add-ons posted → reset to base price ----
             if ( ! isset( $addons_post[ $item_id ] ) ) {
+                if ( $manual_override ) {
+                    $this->apply_manual_line_item_override( $item, $manual_override );
+                    continue;
+                }
                 $quantity      = $item->get_quantity();
                 $base_price    = (float) $product->get_price();
                 $new_subtotal  = $base_price * $quantity;
@@ -414,6 +531,11 @@ class Admin_Order {
                 $addon_cost += $this->get_addon_cost_from_value( $value, $field );
             }
 
+            if ( $manual_override ) {
+                $this->apply_manual_line_item_override( $item, $manual_override );
+                continue;
+            }
+
             // ---- 4. Set new line totals & recalc taxes ----
             $quantity     = $item->get_quantity();
             $base_price   = (float) $product->get_price();
@@ -429,7 +551,7 @@ class Admin_Order {
 
         // ---- COUPON RESTORE (unchanged) ----
         $backup_codes = get_post_meta( $order_id, '_temp_coupon_backup', true );
-        if ( ! empty( $backup_codes ) ) {
+        if ( ! empty( $backup_codes ) && ! $this->is_coupon_request() ) {
             error_log( "[COUPON DEBUG] Restoring " . count( $backup_codes ) . " coupon codes for order {$order_id}" );
 
             foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
@@ -512,6 +634,9 @@ class Admin_Order {
         }
 
         $fields = $this->get_apf_fields_for_product( $product );
+        $manual_override = $this->is_manual_line_item_override_enabled( $item )
+            ? $this->get_manual_line_item_override( $item )
+            : null;
 
         // ---- 1. Remove old meta ----
         foreach ( $fields as $field ) {
@@ -546,16 +671,20 @@ class Admin_Order {
 
         // ---- 3. No add-ons → reset to base price ----
         if ( empty( $addons ) ) {
-            $quantity     = $item->get_quantity();
-            $base_price   = (float) $product->get_price();
-            $new_subtotal = $base_price * $quantity;
+            if ( $manual_override ) {
+                $this->apply_manual_line_item_override( $item, $manual_override );
+            } else {
+                $quantity     = $item->get_quantity();
+                $base_price   = (float) $product->get_price();
+                $new_subtotal = $base_price * $quantity;
 
-            $item->set_subtotal( $new_subtotal );
-            $item->set_total( $new_subtotal );
+                $item->set_subtotal( $new_subtotal );
+                $item->set_total( $new_subtotal );
 
-            $tax_data = $item->calculate_taxes();
-            $item->set_taxes( $tax_data );
-            $item->save();
+                $tax_data = $item->calculate_taxes();
+                $item->set_taxes( $tax_data );
+                $item->save();
+            }
 
             $this->restore_coupons_ajax( $order_id );
 
@@ -564,6 +693,8 @@ class Admin_Order {
             $response['html']      = ob_get_clean();
             $response['subtotal']  = html_entity_decode( wc_price( $item->get_subtotal() ), ENT_QUOTES, 'UTF-8' );
             $response['total']     = html_entity_decode( wc_price( $item->get_total() ), ENT_QUOTES, 'UTF-8' );
+            $response['subtotal_raw'] = wc_format_decimal( $item->get_subtotal(), '' );
+            $response['total_raw']    = wc_format_decimal( $item->get_total(), '' );
             $response['success']   = true;
             wp_send_json( $response );
         }
@@ -588,17 +719,21 @@ class Admin_Order {
             $addon_cost += $this->get_addon_cost_from_value( $value, $field );
         }
 
-        // ---- 5. Set totals & recalc taxes ----
-        $quantity     = $item->get_quantity();
-        $base_price   = (float) $product->get_price();
-        $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
+        if ( $manual_override ) {
+            $this->apply_manual_line_item_override( $item, $manual_override );
+        } else {
+            // ---- 5. Set totals & recalc taxes ----
+            $quantity     = $item->get_quantity();
+            $base_price   = (float) $product->get_price();
+            $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
 
-        $item->set_subtotal( $new_subtotal );
-        $item->set_total( $new_subtotal );
+            $item->set_subtotal( $new_subtotal );
+            $item->set_total( $new_subtotal );
 
-        $tax_data = $item->calculate_taxes();
-        $item->set_taxes( $tax_data );
-        $item->save();
+            $tax_data = $item->calculate_taxes();
+            $item->set_taxes( $tax_data );
+            $item->save();
+        }
 
         $this->restore_coupons_ajax( $order_id );
 
@@ -607,11 +742,166 @@ class Admin_Order {
         $response['html']      = ob_get_clean();
         $response['subtotal']  = html_entity_decode( wc_price( $item->get_subtotal() ), ENT_QUOTES, 'UTF-8' );
         $response['total']     = html_entity_decode( wc_price( $item->get_total() ), ENT_QUOTES, 'UTF-8' );
+        $response['subtotal_raw'] = wc_format_decimal( $item->get_subtotal(), '' );
+        $response['total_raw']    = wc_format_decimal( $item->get_total(), '' );
         $response['success']   = true;
         wp_send_json( $response );
     }
 
+    private function get_manual_line_item_override( WC_Order_Item $item ): ?array {
+        $manual_total    = $item->get_meta( '_manual_line_total_override', true );
+        $manual_subtotal = $item->get_meta( '_manual_line_subtotal_override', true );
+
+        if ( $manual_total === '' ) {
+            return null;
+        }
+
+        if ( $manual_subtotal === '' ) {
+            $manual_subtotal = $manual_total;
+        }
+
+        return [
+            'total'    => (float) $manual_total,
+            'subtotal' => (float) $manual_subtotal,
+        ];
+    }
+
+    private function get_posted_line_item_override( WC_Order_Item $item ): ?array {
+        $item_id = $item->get_id();
+        $manual_flags = $this->get_posted_manual_override_flags();
+
+        $posted_totals    = $_POST['line_total'] ?? [];
+        $posted_subtotals = $_POST['line_subtotal'] ?? [];
+
+        if ( empty( $posted_totals ) && empty( $posted_subtotals ) && isset( $_POST['items'] ) && is_string( $_POST['items'] ) ) {
+            parse_str( $_POST['items'], $items_array );
+            $posted_totals    = $items_array['line_total'] ?? [];
+            $posted_subtotals = $items_array['line_subtotal'] ?? [];
+        }
+
+        if ( ! isset( $posted_totals[ $item_id ] ) && ! isset( $posted_subtotals[ $item_id ] ) ) {
+            return null;
+        }
+
+        $posted_total_raw    = $posted_totals[ $item_id ] ?? '';
+        $posted_subtotal_raw = $posted_subtotals[ $item_id ] ?? $posted_total_raw;
+
+        if ( $posted_total_raw === '' && $posted_subtotal_raw === '' ) {
+            return null;
+        }
+
+        $posted_total    = (float) wc_format_decimal( $posted_total_raw, '' );
+        $posted_subtotal = (float) wc_format_decimal( $posted_subtotal_raw, '' );
+        $current_total   = (float) wc_format_decimal( $item->get_total(), '' );
+        $current_subtotal = (float) wc_format_decimal( $item->get_subtotal(), '' );
+
+        if ( $posted_total === $current_total && $posted_subtotal === $current_subtotal ) {
+            return null;
+        }
+
+        $manual_flag = ! empty( $manual_flags[ $item_id ] );
+        if ( ! $manual_flag && $posted_subtotal === $current_subtotal && $posted_total !== $posted_subtotal ) {
+            $posted_subtotal = $posted_total;
+        }
+        if ( $manual_flag ) {
+            return [
+                'total'    => $posted_total,
+                'subtotal' => $posted_subtotal,
+            ];
+        }
+
+        $product = $item->get_product();
+        if ( ! $product ) {
+            error_log( "[LINE ITEM OVERRIDE] No manual flag for item {$item_id}" );
+            return null;
+        }
+
+        $addons_post = $this->parse_addons_post_data();
+        $expected    = $this->get_expected_line_totals_from_posted_addons( $item, $product, $addons_post );
+        if ( ! $expected ) {
+            $expected = $this->get_expected_line_totals_from_saved_addons( $item, $product );
+        }
+        if ( ! $expected ) {
+            error_log( "[LINE ITEM OVERRIDE] No manual flag for item {$item_id}" );
+            return null;
+        }
+
+        $tolerance = 0.01;
+        if ( abs( $posted_total - (float) $expected['total'] ) <= $tolerance
+            && abs( $posted_subtotal - (float) $expected['subtotal'] ) <= $tolerance ) {
+            return null;
+        }
+
+        error_log(
+            "[LINE ITEM OVERRIDE] Fallback override for item {$item_id} posted total {$posted_total} subtotal {$posted_subtotal} expected total {$expected['total']} subtotal {$expected['subtotal']}"
+        );
+        return [
+            'total'    => $posted_total,
+            'subtotal' => $posted_subtotal,
+        ];
+    }
+
+    private function store_manual_line_item_override( WC_Order_Item $item, array $override ): void {
+        $this->set_manual_line_item_override_enabled( $item, true );
+        $item->update_meta_data( '_manual_line_total_override', $override['total'] );
+        $item->update_meta_data( '_manual_line_subtotal_override', $override['subtotal'] );
+        $item->save();
+    }
+
+    private function apply_manual_line_item_override( WC_Order_Item $item, array $override ): void {
+        $item->set_subtotal( $override['subtotal'] );
+        $item->set_total( $override['total'] );
+
+        $tax_data = $item->calculate_taxes();
+        $item->set_taxes( $tax_data );
+        $item->save();
+    }
+
+    public function apply_manual_override_before_order_totals( $order ): void {
+        if ( ! $order || ! ( $order instanceof WC_Order ) ) {
+            return;
+        }
+        foreach ( $order->get_items() as $item ) {
+            if ( $item->get_type() !== 'line_item' ) {
+                continue;
+            }
+            if ( ! $this->is_manual_line_item_override_enabled( $item ) ) {
+                continue;
+            }
+            $manual_override = $this->get_manual_line_item_override( $item );
+            if ( ! $manual_override ) {
+                continue;
+            }
+            $item->set_subtotal( $manual_override['subtotal'] );
+            $item->set_total( $manual_override['total'] );
+        }
+    }
+
+    private function is_manual_line_item_override_enabled( WC_Order_Item $item ): bool {
+        return $item->get_meta( '_manual_line_item_override_enabled', true ) === 'yes';
+    }
+
+    private function set_manual_line_item_override_enabled( WC_Order_Item $item, bool $enabled ): void {
+        if ( $enabled ) {
+            $item->update_meta_data( '_manual_line_item_override_enabled', 'yes' );
+        } else {
+            $item->delete_meta_data( '_manual_line_item_override_enabled' );
+        }
+    }
+
+    private function get_posted_manual_override_flags(): array {
+        $manual_flags = $_POST['manual_line_item_override'] ?? [];
+        if ( empty( $manual_flags ) && isset( $_POST['items'] ) && is_string( $_POST['items'] ) ) {
+            parse_str( $_POST['items'], $items_array );
+            $manual_flags = $items_array['manual_line_item_override'] ?? [];
+        }
+        return is_array( $manual_flags ) ? $manual_flags : [];
+    }
+
     private function restore_coupons_ajax( $order_id ) {
+        if ( $this->is_coupon_request() ) {
+            return;
+        }
         $backup_codes = get_post_meta( $order_id, '_temp_coupon_backup', true );
         if ( empty( $backup_codes ) ) {
             return;
@@ -631,6 +921,72 @@ class Admin_Order {
             }
         }
         delete_post_meta( $order_id, '_temp_coupon_backup' );
+    }
+
+    private function is_coupon_request(): bool {
+        $action = $_POST['action'] ?? '';
+        return in_array( $action, [ 'woocommerce_add_coupon_discount', 'woocommerce_remove_order_coupon' ], true );
+    }
+
+    private function get_expected_line_totals_from_posted_addons( WC_Order_Item $item, WC_Product $product, array $addons_post ): ?array {
+        $item_id = $item->get_id();
+        if ( ! isset( $addons_post[ $item_id ] ) ) {
+            return null;
+        }
+        $fields = $this->get_apf_fields_for_product( $product );
+        if ( empty( $fields ) ) {
+            return null;
+        }
+        $addons     = $addons_post[ $item_id ];
+        $addon_cost = 0.0;
+        foreach ( $fields as $field ) {
+            $field_id = $field['id'];
+            if ( ! array_key_exists( $field_id, $addons ) ) {
+                continue;
+            }
+            $value = is_array( $addons[ $field_id ] )
+                ? array_map( 'sanitize_text_field', $addons[ $field_id ] )
+                : sanitize_text_field( $addons[ $field_id ] );
+            $addon_cost += $this->get_addon_cost_from_value( $value, $field );
+        }
+        $quantity     = $item->get_quantity();
+        $base_price   = (float) $product->get_price();
+        $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
+
+        return [
+            'total'    => $new_subtotal,
+            'subtotal' => $new_subtotal,
+        ];
+    }
+
+    private function get_expected_line_totals_from_saved_addons( WC_Order_Item $item, WC_Product $product ): ?array {
+        $fields = $this->get_apf_fields_for_product( $product );
+        if ( empty( $fields ) ) {
+            return null;
+        }
+        $addon_cost = 0.0;
+        foreach ( $fields as $field ) {
+            $display_key = sanitize_text_field( $field['label'] );
+            $saved_formatted = $item->get_meta( $display_key, true );
+            if ( ! $saved_formatted ) {
+                continue;
+            }
+            $parsed_value = $this->parse_formatted_to_value( $saved_formatted, $field );
+            if ( $field['type'] === 'checkboxes' && ! empty( $parsed_value ) ) {
+                $parsed_value = explode( ',', $parsed_value );
+            } else {
+                $parsed_value = (array) $parsed_value;
+            }
+            $addon_cost += $this->get_addon_cost_from_value( $parsed_value, $field );
+        }
+        $quantity     = $item->get_quantity();
+        $base_price   = (float) $product->get_price();
+        $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
+
+        return [
+            'total'    => $new_subtotal,
+            'subtotal' => $new_subtotal,
+        ];
     }
 
     private function parse_addons_post_data() {
@@ -1068,6 +1424,13 @@ class Admin_Order {
         return $order && $order->get_status() === 'quote' ? false : $enabled;
     }
 
+    public function hide_manual_override_meta( array $hidden ): array {
+        $hidden[] = '_manual_line_item_override_enabled';
+        $hidden[] = '_manual_line_total_override';
+        $hidden[] = '_manual_line_subtotal_override';
+        return $hidden;
+    }
+
     /* --------------------------------------------------------------------- */
     /*  ADMIN ASSETS                                                       */
     /* --------------------------------------------------------------------- */
@@ -1080,6 +1443,27 @@ class Admin_Order {
             // Your existing add-ons JS (unchanged)
             $addons_js = "
             jQuery(document).ready(function($){
+                function ensureManualFlag(\$row, value){
+                    var item_id = \$row.find('input.order_item_id').val();
+                    if(!item_id){
+                        return;
+                    }
+                    var name = 'manual_line_item_override['+item_id+']';
+                    var \$flag = \$row.find('input[name=\"'+name+'\"]');
+                    if(!\$flag.length){
+                        var \$flagTarget = \$row.find('.line_cost .edit');
+                        if(!\$flagTarget.length){
+                            \$flagTarget = \$row.find('.line_cost');
+                        }
+                        if(\$flagTarget.length){
+                            \$flagTarget.append('<input type=\"hidden\" name=\"'+name+'\" value=\"0\" />');
+                            \$flag = \$row.find('input[name=\"'+name+'\"]');
+                        }
+                    }
+                    if(\$flag.length && value !== undefined){
+                        \$flag.val(value);
+                    }
+                }
                 function moveAddons(){
                     $('tr.item').each(function(){
                         var \$row = $(this);
@@ -1092,13 +1476,14 @@ class Admin_Order {
                             \$row.after(\$newRow);
                             \$addonsTd.empty();
                         }
+                        ensureManualFlag(\$row, 0);
                     });
                 }
                 moveAddons();
                 $('body').on('added_order_item',moveAddons);
                 $('body').on('woocommerce_saved_order_items',moveAddons);
                 $('body').on('click','.edit-order-item',function(e){
-                    var item_id = $(this).data('order_item_id');
+                    var item_id = $(this).closest('tr.item').find('input.order_item_id').val();
                     setTimeout(function(){
                         var \$row = $('tr.item').has('input.order_item_id[value=\"'+item_id+'\"]');
                         var \$addonsRow = \$row.next('.addons-row[data-item-id=\"'+item_id+'\"]');
@@ -1106,7 +1491,40 @@ class Admin_Order {
                             var \$editForm = \$row.find('.edit_item');
                             \$editForm.append('<div class=\"gunsafes-addons-edit\">'+ \$addonsRow.find('td').html() +'</div>');
                         }
+                        ensureManualFlag(\$row, 0);
                     },100);
+                });
+                $('body').on('input change','tr.item input.line_total, tr.item input.line_subtotal',function(){
+                    var \$row = $(this).closest('tr.item');
+                    var item_id = \$row.find('input.order_item_id').val();
+                    if(!item_id){
+                        return;
+                    }
+                    ensureManualFlag(\$row, 1);
+                    if($(this).hasClass('line_subtotal')){
+                        $(this).data('manual-subtotal','1');
+                    }
+                    if($(this).hasClass('line_total')){
+                        var \$subtotal = \$row.find('input.line_subtotal');
+                        if(\$subtotal.length && !\$subtotal.data('manual-subtotal')){
+                            \$subtotal.val($(this).val());
+                        }
+                    }
+                });
+                $('#woocommerce-order-items').on('woocommerce_order_meta_box_save_line_items_ajax_data', function(e, data){
+                    $('tr.item').each(function(){
+                        var \$row = $(this);
+                        var item_id = \$row.find('input.order_item_id').val();
+                        if(!item_id){
+                            return;
+                        }
+                        var name = 'manual_line_item_override['+item_id+']';
+                        var \$flag = \$row.find('input[name=\"'+name+'\"]');
+                        if(\$flag.length && \$flag.val() === '1'){
+                            data.items += '&' + encodeURIComponent(name) + '=1';
+                        }
+                    });
+                    return data;
                 });
                 $('body').on('click','.save',function(e){
                     var \$row = $(this).closest('tr.item');
@@ -1125,6 +1543,12 @@ class Admin_Order {
                             \$row.find('.line_subtotal .view').html(response.subtotal);
                             \$row.find('.line_total .view').html(response.total);
                             \$row.find('.line_tax .view').html(response.html);
+                            if(response.subtotal_raw !== undefined){
+                                \$row.find('input[name=\"line_subtotal['+item_id+']\"]').val(response.subtotal_raw);
+                            }
+                            if(response.total_raw !== undefined){
+                                \$row.find('input[name=\"line_total['+item_id+']\"]').val(response.total_raw);
+                            }
                             $('.button.calc_totals').trigger('click');
                         }
                     });
