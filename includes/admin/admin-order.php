@@ -272,6 +272,10 @@ class Admin_Order {
                     || abs( (float) $posted_subtotal - (float) $expected['subtotal'] ) > $tolerance ) {
                     $fallback_override = true;
                 }
+            } elseif ( ! $manual_flag && ! $expected ) {
+                if ( $posted_total !== $current_total || $posted_subtotal !== $current_subtotal ) {
+                    $fallback_override = true;
+                }
             }
 
             if ( $manual_flag || $fallback_override ) {
@@ -868,6 +872,12 @@ class Admin_Order {
             $expected = $this->get_expected_line_totals_from_saved_addons( $item, $product );
         }
         if ( ! $expected ) {
+            if ( $posted_total !== $current_total || $posted_subtotal !== $current_subtotal ) {
+                return [
+                    'total'    => $posted_total,
+                    'subtotal' => $posted_subtotal,
+                ];
+            }
             error_log( "[LINE ITEM OVERRIDE] No manual flag for item {$item_id}" );
             return null;
         }
