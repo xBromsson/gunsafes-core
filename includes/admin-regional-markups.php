@@ -17,7 +17,6 @@ class GScore_Regional_Markups_Settings {
 
         // Register settings and ensure defaults on admin_init
         add_action( 'admin_init', [ $this, 'register_settings' ] );
-        add_action( 'admin_init', [ $this, 'ensure_defaults' ] );
     }
 
     /**
@@ -92,15 +91,7 @@ class GScore_Regional_Markups_Settings {
     /**
      * Ensure default values exist in the database
      */
-    public function ensure_defaults() {
-        if ( false === get_option( 'gscore_regional_markups_zip' ) ) {
-            update_option( 'gscore_regional_markups_zip', $this->array_to_text( $this->get_default_zip() ) );
-        }
-
-        if ( false === get_option( 'gscore_regional_markups_state' ) ) {
-            update_option( 'gscore_regional_markups_state', $this->array_to_text( $this->get_default_state() ) );
-        }
-    }
+    public function ensure_defaults() {}
 
     public function sanitize_zip( $input ) {
         return $this->sanitize_text( $input, '/^(\d{5})\s+([\d.]+)%?$/' );
@@ -136,7 +127,7 @@ class GScore_Regional_Markups_Settings {
     }
 
     public function zip_field() {
-        $value = get_option( 'gscore_regional_markups_zip', $this->array_to_text( $this->get_default_zip() ) );
+        $value = get_option( 'gscore_regional_markups_zip', '' );
         ?>
         <textarea name="gscore_regional_markups_zip" rows="10" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
         <p class="description">Example: <code>07876 20</code> → 20% markup (percent sign optional)</p>
@@ -144,7 +135,7 @@ class GScore_Regional_Markups_Settings {
     }
 
     public function state_field() {
-        $value = get_option( 'gscore_regional_markups_state', $this->array_to_text( $this->get_default_state() ) );
+        $value = get_option( 'gscore_regional_markups_state', '' );
         ?>
         <textarea name="gscore_regional_markups_state" rows="10" cols="50" class="large-text"><?php echo esc_textarea( $value ); ?></textarea>
         <p class="description">Example: <code>NJ 20</code> → 20% markup (percent sign optional)</p>
@@ -187,6 +178,66 @@ class GScore_Regional_Markups_Settings {
     }
 }
 
+class GScore_Regional_Markups {
+
+    public function __construct() {
+        add_filter( 'woocommerce_package_rates', [ $this, 'apply_markups' ], 100, 2 );
+    }
+
+    public function apply_markups( $rates, $package ) {
+        $zip_text   = get_option( 'gscore_regional_markups_zip', '' );
+        $state_text = get_option( 'gscore_regional_markups_state', '' );
+
+        $zip_markups   = $zip_text === '' ? [] : $this->text_to_array( $zip_text, '/^(\d{5})\s+([\d.]+)%?$/' );
+        $state_markups = $state_text === '' ? [] : $this->text_to_array( $state_text, '/^([A-Z]{2})\s+([\d.]+)%?$/' );
+
+        $state    = $package['destination']['state'] ?? '';
+        $postcode = $package['destination']['postcode'] ?? '';
+
+        $markup_percent = 0;
+        if ( isset( $zip_markups[ $postcode ] ) ) {
+            $markup_percent = $zip_markups[ $postcode ];
+        } elseif ( isset( $state_markups[ $state ] ) ) {
+            $markup_percent = $state_markups[ $state ];
+        }
+
+        if ( $markup_percent <= 0 ) {
+            return $rates;
+        }
+
+        $multiplier = 1 + ( $markup_percent / 100 );
+        foreach ( $rates as $rate ) {
+            $rate->cost = round( (float) $rate->cost * $multiplier, 2 );
+            if ( wc_tax_enabled() ) {
+                $tax_class = get_option( 'woocommerce_shipping_tax_class' );
+                if ( $tax_class === 'inherit' ) {
+                    $tax_class = '';
+                }
+                $tax_rates = WC_Tax::get_shipping_tax_rates( $tax_class );
+                if ( ! empty( $tax_rates ) ) {
+                    $rate->taxes = WC_Tax::calc_shipping_tax( $rate->cost, $tax_rates );
+                }
+            }
+        }
+
+        return $rates;
+    }
+
+    private function text_to_array( $text, $pattern ) {
+        if ( ! is_string( $text ) || $text === '' ) {
+            return [];
+        }
+        $array = [];
+        $lines = array_filter( array_map( 'trim', explode( "\n", $text ) ) );
+        foreach ( $lines as $line ) {
+            if ( preg_match( $pattern, $line, $m ) ) {
+                $array[ $m[1] ] = (float) $m[2];
+            }
+        }
+        return $array;
+    }
+}
+
 // Instantiate the class on admin_menu with a high priority (after WooCommerce adds its menu)
 add_action( 'admin_menu', function() {
     static $instance = null;
@@ -195,3 +246,10 @@ add_action( 'admin_menu', function() {
         $instance = new GScore_Regional_Markups_Settings();
     }
 }, 998 );
+
+add_action( 'plugins_loaded', function() {
+    static $instance = null;
+    if ( $instance === null ) {
+        $instance = new GScore_Regional_Markups();
+    }
+}, 20 );

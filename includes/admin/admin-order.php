@@ -175,9 +175,11 @@ class Admin_Order {
                 error_log( "[SHIPPING DEBUG] MANUAL EDIT DETECTED for item #{$item_id}! Setting override meta to {$posted_cost}" );
                 $item->update_meta_data( '_manual_shipping_override', $posted_cost );
                 $item->set_total( $posted_cost );
-                $tax_rates = WC_Tax::get_shipping_tax_rates();
-                $taxes = [ 'total' => WC_Tax::calc_tax( $posted_cost, $tax_rates, false ) ];
-                $item->set_taxes( $taxes );
+                if ( wc_tax_enabled() ) {
+                    $tax_rates = WC_Tax::get_shipping_tax_rates();
+                    $taxes = [ 'total' => WC_Tax::calc_tax( $posted_cost, $tax_rates, false ) ];
+                    $item->set_taxes( $taxes );
+                }
                 $item->save();  // Save meta immediately
             } else {
                 error_log( "[SHIPPING DEBUG] Posted cost matches current - no override needed" );
@@ -1178,7 +1180,7 @@ class Admin_Order {
                 if ( $manual_flag_for_item || abs( $posted_cost - $current_total ) > $tolerance ) {
                     $item->update_meta_data( '_manual_shipping_override', $posted_cost );
                     $item->set_total( $posted_cost );
-                    if ( $shipping_method->tax_status === 'taxable' ) {
+                    if ( wc_tax_enabled() && $shipping_method->tax_status === 'taxable' ) {
                         $tax_rates = WC_Tax::get_shipping_tax_rates();
                         $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $posted_cost, $tax_rates, false ) ];
                     }
@@ -1202,7 +1204,7 @@ class Admin_Order {
                 $item->delete_meta_data( '_manual_shipping_override' );
             } else {
                 $item->set_total( $manual_override );
-                if ( $shipping_method->tax_status === 'taxable' ) {
+                if ( wc_tax_enabled() && $shipping_method->tax_status === 'taxable' ) {
                     $tax_rates = WC_Tax::get_shipping_tax_rates();
                     $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $manual_override, $tax_rates, false ) ];
                 }
@@ -1278,7 +1280,7 @@ class Admin_Order {
             $calculated_taxes = [ 'total' => $rate->taxes ];
         }
 
-        if ( $shipping_method->tax_status === 'taxable' ) {
+        if ( wc_tax_enabled() && $shipping_method->tax_status === 'taxable' ) {
             $tax_rates = WC_Tax::get_shipping_tax_rates();
             $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $calculated_cost, $tax_rates, false ) ];
         }
