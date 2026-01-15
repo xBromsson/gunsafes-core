@@ -15,6 +15,7 @@ define( 'GUNSAFES_CORE_VER',  '0.1.0' );
 
 // Load everything safely on plugins_loaded (or later)
 add_action( 'plugins_loaded', function() {
+    error_log( 'Gunsafes Core: plugins_loaded fired' );
 
     // These files are safe to load early (they don't use current_user_can, wp_enqueue, etc.)
     require_once __DIR__ . '/includes/call-for-pricing.php';
@@ -33,6 +34,9 @@ add_action( 'plugins_loaded', function() {
     // Instantiate the admin class (only in admin area to save resources)
     if ( is_admin() && class_exists( 'Admin_Order' ) ) {
         new Admin_Order();
+    }
+    if ( class_exists( 'GScore_Dropship_Notifier' ) ) {
+        error_log( 'Gunsafes Core: GScore_Dropship_Notifier class loaded' );
     }
     if ( class_exists( 'GScore_Jet_Smart_Filters_Guard' ) ) {
         new GScore_Jet_Smart_Filters_Guard();
