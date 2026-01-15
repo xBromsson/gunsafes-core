@@ -1757,6 +1757,12 @@ class Admin_Order {
                 $('body').on('order-totals-recalculate-complete',function(){
                     setTimeout(moveAddons, 0);
                 });
+                $('#woocommerce-order-items').on('wc_order_items_reloaded',function(){
+                    setTimeout(moveAddons, 0);
+                });
+                $('#woocommerce-order-items').on('wc_order_items_reload',function(){
+                    setTimeout(moveAddons, 0);
+                });
                 toggleTaxExemptNumber();
                 $('body').on('change click','#_gscore_tax_exempt',toggleTaxExemptNumber);
                 function fetchTaxExemptForUser(userId){
