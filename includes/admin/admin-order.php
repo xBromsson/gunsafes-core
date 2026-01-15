@@ -28,12 +28,14 @@ class Admin_Order {
         add_action( 'woocommerce_admin_order_item_add_line_buttons', [ $this, 'add_custom_buttons' ] );
         add_action( 'woocommerce_new_order', [ $this, 'auto_set_sales_rep_on_creation' ], 10, 1 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'save_sales_rep' ], 100, 2 );
+        add_action( 'woocommerce_process_shop_order_meta', [ $this, 'save_tax_exempt_fields' ], 90, 2 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'preserve_coupons_before_save' ], 5, 2 );
         add_action( 'woocommerce_saved_order_items', [ $this, 'preserve_coupons_before_save' ], 5, 2 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'save_order_item_addons' ], 100, 2 );
         add_action( 'woocommerce_saved_order_items', [ $this, 'save_order_item_addons' ], 20, 2 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'force_recalculate_after_addons' ], 101, 2 );
         add_action( 'wp_ajax_save_order_item_addons', [ $this, 'ajax_save_order_item_addons' ] );
+        add_action( 'wp_ajax_gscore_get_tax_exempt', [ $this, 'ajax_get_tax_exempt' ] );
         add_filter( 'woocommerce_shipping_methods', [ $this, 'add_flexible_shipping_instances' ] );
         add_action( 'woocommerce_saved_order_items', [ $this, 'update_shipping_name' ], 10, 2 );
         add_action( 'woocommerce_new_order_item', [ $this, 'handle_new_order_item' ], 10, 3 );
@@ -346,6 +348,28 @@ class Admin_Order {
             </select>
         </div>
         <?php
+        $user_id = $order->get_user_id();
+        $order_exempt = $order->get_meta( '_gscore_tax_exempt', true );
+        $order_exempt_number = $order->get_meta( '_gscore_tax_exempt_number', true );
+        if ( $order_exempt === '' && $user_id ) {
+            $order_exempt = get_user_meta( $user_id, '_gscore_tax_exempt', true );
+        }
+        if ( $order_exempt_number === '' && $user_id ) {
+            $order_exempt_number = get_user_meta( $user_id, '_gscore_tax_exempt_number', true );
+        }
+        $is_exempt = $order_exempt === 'yes';
+        ?>
+        <div class="form-field form-field-wide">
+            <label for="_gscore_tax_exempt">
+                <input type="checkbox" name="_gscore_tax_exempt" id="_gscore_tax_exempt" value="yes" <?php checked( $is_exempt ); ?> />
+                <?php esc_html_e( 'Tax Exempt', 'gunsafes-core' ); ?>
+            </label>
+        </div>
+        <div class="form-field form-field-wide" id="gscore_tax_exempt_number_row" style="<?php echo $is_exempt ? '' : 'display:none;'; ?>">
+            <label for="_gscore_tax_exempt_number"><?php esc_html_e( 'Tax Exempt Number', 'gunsafes-core' ); ?></label>
+            <input type="text" name="_gscore_tax_exempt_number" id="_gscore_tax_exempt_number" class="regular-text" value="<?php echo esc_attr( $order_exempt_number ); ?>" />
+        </div>
+        <?php
     }
 
     public function auto_set_sales_rep_on_creation( $order_id ): void {
@@ -375,6 +399,95 @@ class Admin_Order {
                 $order->save();
             }
         }
+    }
+
+    public function save_tax_exempt_fields( $post_id, $post ): void {
+        if ( ! is_admin() || ! current_user_can( 'manage_woocommerce' ) ) {
+            return;
+        }
+        $order = wc_get_order( $post_id );
+        if ( ! $order ) {
+            return;
+        }
+
+        error_log( sprintf( 'Gunsafes Core: save_tax_exempt_fields order #%d start', $post_id ) );
+
+        $prev_exempt = $order->get_meta( '_gscore_tax_exempt', true );
+        $prev_number = $order->get_meta( '_gscore_tax_exempt_number', true );
+        $user_id     = $order->get_user_id();
+        $user_exempt = $user_id ? get_user_meta( $user_id, '_gscore_tax_exempt', true ) : '';
+        $user_number = $user_id ? get_user_meta( $user_id, '_gscore_tax_exempt_number', true ) : '';
+
+        $new_exempt = isset( $_POST['_gscore_tax_exempt'] ) ? 'yes' : 'no';
+        $new_number = isset( $_POST['_gscore_tax_exempt_number'] )
+            ? sanitize_text_field( wp_unslash( $_POST['_gscore_tax_exempt_number'] ) )
+            : '';
+
+        if (
+            $prev_exempt === ''
+            && $prev_number === ''
+            && $new_exempt === 'no'
+            && $new_number === ''
+            && ( $user_exempt !== '' || $user_number !== '' )
+        ) {
+            $new_exempt = $user_exempt !== '' ? $user_exempt : 'no';
+            $new_number = $user_number;
+        }
+
+        if ( $new_exempt !== $prev_exempt ) {
+            $order->update_meta_data( '_gscore_tax_exempt', $new_exempt );
+        }
+        if ( $new_number !== $prev_number ) {
+            $order->update_meta_data( '_gscore_tax_exempt_number', $new_number );
+        }
+
+        $order->update_meta_data( 'is_vat_exempt', $new_exempt );
+
+        if ( $user_id ) {
+            update_user_meta( $user_id, '_gscore_tax_exempt', $new_exempt );
+            update_user_meta( $user_id, '_gscore_tax_exempt_number', $new_number );
+        }
+
+        error_log(
+            sprintf(
+                'Gunsafes Core: save_tax_exempt_fields order #%d user_id %s new_exempt %s new_number %s prev_exempt %s prev_number %s user_exempt %s user_number %s',
+                $post_id,
+                $user_id ? (string) $user_id : 'none',
+                $new_exempt,
+                $new_number === '' ? '(empty)' : $new_number,
+                $prev_exempt === '' ? '(empty)' : $prev_exempt,
+                $prev_number === '' ? '(empty)' : $prev_number,
+                $user_exempt === '' ? '(empty)' : $user_exempt,
+                $user_number === '' ? '(empty)' : $user_number
+            )
+        );
+
+        $order->save();
+
+        if ( $new_exempt !== $prev_exempt ) {
+            $order->calculate_taxes();
+            $order->calculate_totals( false );
+        }
+    }
+
+    public function ajax_get_tax_exempt(): void {
+        if ( ! is_admin() || ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => 'Unauthorized' ], 403 );
+        }
+        check_ajax_referer( 'gscore_tax_exempt', 'nonce' );
+
+        $user_id = isset( $_POST['user_id'] ) ? absint( $_POST['user_id'] ) : 0;
+        if ( ! $user_id ) {
+            wp_send_json_success( [ 'exempt' => 'no', 'number' => '' ] );
+        }
+
+        $exempt = get_user_meta( $user_id, '_gscore_tax_exempt', true );
+        $number = get_user_meta( $user_id, '_gscore_tax_exempt_number', true );
+
+        wp_send_json_success( [
+            'exempt' => $exempt === 'yes' ? 'yes' : 'no',
+            'number' => (string) $number,
+        ] );
     }
 
     public function add_custom_buttons( $order ): void {}
@@ -1567,13 +1680,31 @@ class Admin_Order {
     /* --------------------------------------------------------------------- */
     public function enqueue_assets(): void {
         $screen = get_current_screen();
-        if ( $screen && $screen->id === 'shop_order' ) {
+        $is_order_screen = $screen && (
+            $screen->post_type === 'shop_order'
+            || $screen->id === 'shop_order'
+            || $screen->id === 'woocommerce_page_wc-orders'
+            || $screen->base === 'woocommerce_page_wc-orders'
+        );
+        if ( $is_order_screen ) {
             wp_enqueue_style( 'gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/css/admin.css', [], GUNSAFES_CORE_VER );
             wp_enqueue_script( 'gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/js/admin.js', [ 'jquery' ], GUNSAFES_CORE_VER, true );
 
             // Your existing add-ons JS (unchanged)
             $addons_js = "
             jQuery(document).ready(function($){
+                var gscoreTaxExemptNonce = '" . esc_js( wp_create_nonce( 'gscore_tax_exempt' ) ) . "';
+                function toggleTaxExemptNumber(){
+                    var \$row = $('#gscore_tax_exempt_number_row');
+                    if(!\$row.length){
+                        return;
+                    }
+                    if($('#_gscore_tax_exempt').is(':checked')){
+                        \$row.css('display','block');
+                    } else {
+                        \$row.css('display','none');
+                    }
+                }
                 function ensureManualFlag(\$row, value){
                     var item_id = \$row.find('input.order_item_id').val();
                     if(!item_id){
@@ -1596,6 +1727,7 @@ class Admin_Order {
                     }
                 }
                 function moveAddons(){
+                    var moved = false;
                     $('tr.item').each(function(){
                         var \$row = $(this);
                         var \$addonsTd = \$row.find('.item_addons');
@@ -1606,13 +1738,71 @@ class Admin_Order {
                             \$newRow.find('td').append(\$addonsTd.html());
                             \$row.after(\$newRow);
                             \$addonsTd.empty();
+                            moved = true;
                         }
                         ensureManualFlag(\$row, 0);
                     });
+                    if(moved){
+                        $('body').addClass('gscore-addons-ready');
+                    } else {
+                        $('body').removeClass('gscore-addons-ready');
+                    }
                 }
                 moveAddons();
                 $('body').on('added_order_item',moveAddons);
                 $('body').on('woocommerce_saved_order_items',moveAddons);
+                $('body').on('order-totals-recalculate-success',function(){
+                    setTimeout(moveAddons, 0);
+                });
+                $('body').on('order-totals-recalculate-complete',function(){
+                    setTimeout(moveAddons, 0);
+                });
+                toggleTaxExemptNumber();
+                $('body').on('change click','#_gscore_tax_exempt',toggleTaxExemptNumber);
+                function fetchTaxExemptForUser(userId){
+                    userId = parseInt(userId, 10) || 0;
+                    if(!userId){
+                        $('#_gscore_tax_exempt').prop('checked', false);
+                        $('#_gscore_tax_exempt_number').val('');
+                        toggleTaxExemptNumber();
+                        return;
+                    }
+                    $.post(ajaxurl, {
+                        action: 'gscore_get_tax_exempt',
+                        nonce: gscoreTaxExemptNonce,
+                        user_id: userId
+                    }, function(response){
+                        if(!response || !response.success || !response.data){
+                            return;
+                        }
+                        var isExempt = response.data.exempt === 'yes';
+                        $('#_gscore_tax_exempt').prop('checked', isExempt);
+                        $('#_gscore_tax_exempt_number').val(response.data.number || '');
+                        toggleTaxExemptNumber();
+                    });
+                }
+                function maybeFetchTaxExempt(){
+                    var userId = $('#customer_user').val() || '';
+                    fetchTaxExemptForUser(userId);
+                }
+                $('body').on('change','#customer_user',function(){
+                    setTimeout(maybeFetchTaxExempt, 0);
+                });
+                $('body').on('select2:select','#customer_user',function(e){
+                    if(e && e.params && e.params.data && e.params.data.id){
+                        fetchTaxExemptForUser(e.params.data.id);
+                        return;
+                    }
+                    setTimeout(maybeFetchTaxExempt, 0);
+                });
+                $(document).ajaxSuccess(function(e, xhr, settings){
+                    if(!settings || !settings.data){
+                        return;
+                    }
+                    if(settings.data.indexOf('action=woocommerce_get_customer_details') !== -1){
+                        setTimeout(maybeFetchTaxExempt, 0);
+                    }
+                });
                 $('body').on('click','.edit-order-item',function(e){
                     var item_id = $(this).closest('tr.item').find('input.order_item_id').val();
                     setTimeout(function(){
@@ -1707,13 +1897,29 @@ class Admin_Order {
 
             // Your CSS (unchanged)
             $css = '
-            th.item_addons, td.item_addons { display:none; }
+            body.gscore-addons-ready th.item_addons,
+            body.gscore-addons-ready td.item_addons { display:none; }
             .addons-row td { padding:10px; background:#f8f8f8; border-top:1px solid #ddd; }
             .addon-field { margin-bottom:8px; }
             .addon-field label { display:block; font-weight:bold; }
             .addon-radio-group, .addon-checkbox-group { margin-top:5px; }
             .required { color:red; }
             .gunsafes-addons-edit { margin-top:10px; padding:10px; background:#f8f8f8; border:1px solid #ddd; }
+            #gscore_tax_exempt_number_row { display:none; }
+            #woocommerce-order-data #_gscore_tax_exempt,
+            #order_data #_gscore_tax_exempt {
+                width:16px !important;
+                height:16px !important;
+                min-width:16px !important;
+                margin:0 6px 0 0 !important;
+                display:inline-block;
+            }
+            #woocommerce-order-data label[for="_gscore_tax_exempt"],
+            #order_data label[for="_gscore_tax_exempt"] {
+                display:inline-flex;
+                align-items:center;
+                gap:6px;
+            }
             ';
             wp_add_inline_style( 'gunsafes-core-order', $css );
         }
