@@ -23,9 +23,6 @@ class GScore_Regional_Markups_Settings {
      * Add submenu under the top-level WooCommerce menu
      */
     public function add_settings_page() {
-        // Debug: confirm this method runs
-        error_log( 'GScore_Regional_Markups_Settings: add_settings_page() executed – adding submenu' );
-
         add_submenu_page(
             'woocommerce',                          // Parent slug – correct for top-level WooCommerce menu
             'Regional Shipping Markups',
@@ -242,7 +239,6 @@ class GScore_Regional_Markups {
 add_action( 'admin_menu', function() {
     static $instance = null;
     if ( $instance === null ) {
-        error_log( 'GScore_Regional_Markups_Settings: Class instantiated successfully' );
         $instance = new GScore_Regional_Markups_Settings();
     }
 }, 998 );

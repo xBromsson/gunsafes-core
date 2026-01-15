@@ -16,13 +16,10 @@ if (!class_exists('GScore_Dropship_Notifier')) :
 class GScore_Dropship_Notifier {
     
     public function __construct() {
-        error_log('[DROPSHIP] Notifier constructor running');
         if (!class_exists('WooCommerce')) {
-            error_log('[DROPSHIP] WooCommerce class missing in constructor');
             return;
         }
         add_action('woocommerce_order_status_processing', [$this, 'send_dropship_notification'], 10, 1);
-        add_action('woocommerce_order_status_changed', [$this, 'log_status_change'], 10, 4);
     }
 
     // --- APF Helper: Convert complex APF values to text ---
@@ -130,14 +127,8 @@ class GScore_Dropship_Notifier {
 
     // --- Main email sender ---
     public function send_dropship_notification($order_id) {
-        error_log('[DROPSHIP] Triggered for order ' . $order_id);
         $order = wc_get_order($order_id);
-        if (!$order) {
-            error_log('[DROPSHIP] Order not found');
-            return;
-        }
-
-        error_log('[DROPSHIP] Status: ' . $order->get_status());
+        if (!$order) return;
 
         $order_number = $order->get_id();
         $order_date = $order->get_date_created() ? $order->get_date_created()->date_i18n('n/j/Y g:i:s A') : '';
@@ -160,17 +151,11 @@ class GScore_Dropship_Notifier {
         foreach ($order->get_items() as $item_id => $item) {
             if (!$item instanceof WC_Order_Item_Product) continue;
             $product = $item->get_product();
-            if (!$product) {
-                error_log('[DROPSHIP] Item ' . $item_id . ' has no product');
-                continue;
-            }
+            if (!$product) continue;
 
             $product_id = $product->is_type('variation') ? $product->get_parent_id() : $product->get_id();
             $warehouse_terms = wp_get_post_terms($product_id, 'warehouse');
-            if (empty($warehouse_terms) || is_wp_error($warehouse_terms)) {
-                error_log('[DROPSHIP] Product ' . $product_id . ' has no warehouse terms');
-                continue;
-            }
+            if (empty($warehouse_terms) || is_wp_error($warehouse_terms)) continue;
 
             $sku = $product->get_sku();
             $mfr_part = get_post_meta($product_id, 'manufacturer_part_number', true);
@@ -181,15 +166,9 @@ class GScore_Dropship_Notifier {
 
             foreach ($warehouse_terms as $term) {
                 $rep_user_id = get_term_meta($term->term_id, 'assigned_sales_rep', true);
-                if (!$rep_user_id) {
-                    error_log('[DROPSHIP] Warehouse term ' . $term->term_id . ' has no assigned_sales_rep');
-                    continue;
-                }
+                if (!$rep_user_id) continue;
                 $user = get_userdata($rep_user_id);
-                if (!$user || empty($user->user_email)) {
-                    error_log('[DROPSHIP] Rep user not found or missing email: ' . $rep_user_id);
-                    continue;
-                }
+                if (!$user || empty($user->user_email)) continue;
 
                 $items_by_rep[$user->user_email][] = [
                     'name' => $product->get_name(),
@@ -203,10 +182,7 @@ class GScore_Dropship_Notifier {
             }
         }
 
-        if (empty($items_by_rep)) {
-            error_log('[DROPSHIP] No items grouped by rep - aborting');
-            return;
-        }
+        if (empty($items_by_rep)) return;
 
         foreach ($items_by_rep as $rep_email => $products) {
             $rep_subtotal = array_sum(array_column($products, 'item_total'));
@@ -275,21 +251,15 @@ class GScore_Dropship_Notifier {
                 $message_html,
                 ['Content-Type: text/html; charset=UTF-8']
             );
-            error_log('[DROPSHIP] Email sent to ' . $rep_email);
         }
     }
 
-    public function log_status_change($order_id, $old_status, $new_status, $order) {
-        error_log('[DROPSHIP] Status change for order ' . $order_id . ': ' . $old_status . ' -> ' . $new_status);
-    }
 }
 
 // Initialize immediately when file is loaded (plugins_loaded already fired in gunsafes-core.php)
 if (class_exists('WooCommerce')) {
-    error_log('[DROPSHIP] WooCommerce class found; instantiating notifier');
     new GScore_Dropship_Notifier();
 } else {
-    error_log('[DROPSHIP] WooCommerce class missing on file load');
 }
 
 endif;

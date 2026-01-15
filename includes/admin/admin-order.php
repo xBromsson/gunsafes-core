@@ -73,8 +73,6 @@ class Admin_Order {
         }
         update_post_meta( $post_id, '_temp_coupon_backup', $coupon_codes );
 
-        $hook = current_filter();
-        error_log( "[COUPON DEBUG] Backup saved via {$hook} for order {$post_id}: " . count( $coupon_codes ) . ' coupons' );
     }
 
     /* --------------------------------------------------------------------- */
@@ -92,22 +90,15 @@ class Admin_Order {
      * Detect manual shipping cost edits using raw $_POST (since $items['shipping'] is often empty in admin AJAX saves)
      */
     public function detect_manual_shipping_override( $order_id, $items ) {
-        error_log( "===== [SHIPPING DEBUG] woocommerce_before_save_order_items fired for order #{$order_id} =====" );
-
         $order = wc_get_order( $order_id );
         if ( ! $order ) {
-            error_log( "[SHIPPING DEBUG] Order #{$order_id} not found!" );
             return;
         }
-
-        // Log raw POST for debugging (remove or comment out after testing)
-        error_log( "[SHIPPING DEBUG] Raw _POST shipping_cost: " . print_r( $_POST['shipping_cost'] ?? [], true ) );
 
         $posted_shipping_costs = $this->get_posted_shipping_costs();   // This is the key field WooCommerce uses for shipping edits
 
         $shipping_items = $order->get_items( 'shipping' );
         if ( empty( $shipping_items ) ) {
-            error_log( "[SHIPPING DEBUG] No shipping items found in order." );
             return;
         }
 
@@ -143,12 +134,10 @@ class Admin_Order {
                 $item->set_method_id( $effective_method_id );
             }
             if ( ! $effective_method_id || strpos( $effective_method_id, 'flexible_shipping_' ) !== 0 ) {
-                error_log( "[SHIPPING DEBUG] Skipping non-flexible item #{$item_id} (method: {$effective_method_id})" );
                 continue;
             }
 
             $current_cost = wc_format_decimal( $item->get_total(), '' );
-            error_log( "[SHIPPING DEBUG] Item #{$item_id} - Current total before save: {$current_cost}" );
 
             $posted_cost_raw = $posted_shipping_costs[ $item_id ] ?? null;
             $manual_flag_for_item = ! empty( $manual_flags[ $item_id ] );
@@ -162,17 +151,13 @@ class Admin_Order {
                 }
             }
             if ( $posted_cost_raw === null ) {
-                error_log( "[SHIPPING DEBUG] Item #{$item_id} - No posted shipping_cost in _POST (no manual edit?)" );
                 continue;
             }
             $posted_cost = wc_format_decimal( $posted_cost_raw, '' );
 
-            error_log( "[SHIPPING DEBUG] Item #{$item_id} - Posted shipping cost from _POST: {$posted_cost} (raw: {$posted_cost_raw})" );
-
             $tolerance = 0.01;
 
             if ( $manual_flag_for_item || abs( (float) $posted_cost - (float) $current_cost ) > $tolerance ) {
-                error_log( "[SHIPPING DEBUG] MANUAL EDIT DETECTED for item #{$item_id}! Setting override meta to {$posted_cost}" );
                 $item->update_meta_data( '_manual_shipping_override', $posted_cost );
                 $item->set_total( $posted_cost );
                 if ( wc_tax_enabled() ) {
@@ -181,12 +166,8 @@ class Admin_Order {
                     $item->set_taxes( $taxes );
                 }
                 $item->save();  // Save meta immediately
-            } else {
-                error_log( "[SHIPPING DEBUG] Posted cost matches current - no override needed" );
             }
         }
-
-        error_log( "===== [SHIPPING DEBUG] Detection complete for order #{$order_id} =====" );
     }
 
     /**
@@ -208,13 +189,6 @@ class Admin_Order {
             $posted_totals    = $items_array['line_total'] ?? [];
             $posted_subtotals = $items_array['line_subtotal'] ?? [];
         }
-
-        $flag_keys = is_array( $manual_flags ) ? implode( ',', array_keys( $manual_flags ) ) : '';
-        $total_keys = is_array( $posted_totals ) ? implode( ',', array_keys( $posted_totals ) ) : '';
-        $subtotal_keys = is_array( $posted_subtotals ) ? implode( ',', array_keys( $posted_subtotals ) ) : '';
-        error_log( "[LINE ITEM OVERRIDE] Detect start order {$order_id} via " . current_filter() . " flags: {$flag_keys} totals: {$total_keys} subtotals: {$subtotal_keys}" );
-        error_log( "[LINE ITEM OVERRIDE] Raw manual flags: " . wp_json_encode( $manual_flags ) );
-        error_log( "[LINE ITEM OVERRIDE] Raw addons post keys: " . wp_json_encode( array_keys( (array) $addons_post ) ) );
 
         if ( empty( $posted_totals ) && empty( $posted_subtotals ) ) {
             return;
@@ -255,17 +229,6 @@ class Admin_Order {
             }
             $tolerance   = 0.01;
 
-            error_log(
-                "[LINE ITEM OVERRIDE] Item {$item_id} posted total {$posted_total} subtotal {$posted_subtotal} current total {$current_total} subtotal {$current_subtotal}"
-            );
-            if ( $expected ) {
-                error_log(
-                    "[LINE ITEM OVERRIDE] Item {$item_id} expected from addons total {$expected['total']} subtotal {$expected['subtotal']}"
-                );
-            } else {
-                error_log( "[LINE ITEM OVERRIDE] Item {$item_id} expected from addons: none" );
-            }
-
             $fallback_override = false;
             if ( ! $manual_flag && $expected ) {
                 if ( abs( (float) $posted_total - (float) $expected['total'] ) > $tolerance
@@ -283,8 +246,6 @@ class Admin_Order {
                     'total'    => $posted_total,
                     'subtotal' => $posted_subtotal,
                 ] );
-                $source = $manual_flag ? 'manual_flag' : 'fallback_expected';
-                error_log( "[LINE ITEM OVERRIDE] Detected manual override ({$source}) for item {$item_id}: total {$posted_total}, subtotal {$posted_subtotal}" );
             } elseif ( $expected
                 && abs( (float) $posted_total - (float) $expected['total'] ) <= $tolerance
                 && abs( (float) $posted_subtotal - (float) $expected['subtotal'] ) <= $tolerance ) {
@@ -292,7 +253,6 @@ class Admin_Order {
                 $item->delete_meta_data( '_manual_line_total_override' );
                 $item->delete_meta_data( '_manual_line_subtotal_override' );
                 $item->save();
-                error_log( "[LINE ITEM OVERRIDE] Cleared manual override for item {$item_id}" );
             }
         }
     }
@@ -602,19 +562,12 @@ class Admin_Order {
         // ---- COUPON RESTORE (unchanged) ----
         $backup_codes = get_post_meta( $order_id, '_temp_coupon_backup', true );
         if ( ! empty( $backup_codes ) && ! $this->is_coupon_request() ) {
-            error_log( "[COUPON DEBUG] Restoring " . count( $backup_codes ) . " coupon codes for order {$order_id}" );
-
             foreach ( $order->get_items( 'coupon' ) as $coupon_item ) {
                 $order->remove_item( $coupon_item->get_id() );
             }
 
             foreach ( $backup_codes as $code ) {
                 $result = $order->apply_coupon( $code );
-                if ( is_wp_error( $result ) ) {
-                    error_log( "[COUPON DEBUG] Failed to apply coupon {$code}: " . $result->get_error_message() );
-                } else {
-                    error_log( "[COUPON DEBUG] Successfully applied coupon {$code}" );
-                }
             }
             delete_post_meta( $order_id, '_temp_coupon_backup' );
         }
@@ -862,7 +815,6 @@ class Admin_Order {
 
         $product = $item->get_product();
         if ( ! $product ) {
-            error_log( "[LINE ITEM OVERRIDE] No manual flag for item {$item_id}" );
             return null;
         }
 
@@ -878,7 +830,6 @@ class Admin_Order {
                     'subtotal' => $posted_subtotal,
                 ];
             }
-            error_log( "[LINE ITEM OVERRIDE] No manual flag for item {$item_id}" );
             return null;
         }
 
@@ -888,9 +839,6 @@ class Admin_Order {
             return null;
         }
 
-        error_log(
-            "[LINE ITEM OVERRIDE] Fallback override for item {$item_id} posted total {$posted_total} subtotal {$posted_subtotal} expected total {$expected['total']} subtotal {$expected['subtotal']}"
-        );
         return [
             'total'    => $posted_total,
             'subtotal' => $posted_subtotal,
@@ -970,11 +918,6 @@ class Admin_Order {
 
         foreach ( $backup_codes as $code ) {
             $result = $order->apply_coupon( $code );
-            if ( is_wp_error( $result ) ) {
-                error_log( "[COUPON DEBUG] AJAX failed {$code}: " . $result->get_error_message() );
-            } else {
-                error_log( "[COUPON DEBUG] AJAX applied {$code}" );
-            }
         }
         delete_post_meta( $order_id, '_temp_coupon_backup' );
     }
