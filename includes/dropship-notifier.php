@@ -130,7 +130,7 @@ class GScore_Dropship_Notifier {
         $order = wc_get_order($order_id);
         if (!$order) return;
 
-        $order_number = $order->get_id();
+        $order_number = $order->get_order_number();
         $order_date = $order->get_date_created() ? $order->get_date_created()->date_i18n('n/j/Y g:i:s A') : '';
         $payment_status = 'Payment information received.';
 
