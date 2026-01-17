@@ -22,6 +22,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/admin-bcc-settings.php';
     require_once __DIR__ . '/includes/admin-regional-markups.php';
     require_once __DIR__ . '/includes/jet-smart-filters-guard.php';
+    require_once __DIR__ . '/includes/checkout-shipping-phone.php';
 
     // This one uses current_user_can() → must wait until pluggable.php is loaded
     require_once __DIR__ . '/includes/admin/admin-order.php';
@@ -35,5 +36,9 @@ add_action( 'plugins_loaded', function() {
     }
     if ( class_exists( 'GScore_Jet_Smart_Filters_Guard' ) ) {
         new GScore_Jet_Smart_Filters_Guard();
+    }
+    if ( class_exists( 'GScore_Checkout_Shipping_Phone' ) ) {
+        $shipping_phone = new GScore_Checkout_Shipping_Phone();
+        $shipping_phone->register();
     }
 });

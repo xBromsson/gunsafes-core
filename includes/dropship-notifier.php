@@ -145,6 +145,9 @@ class GScore_Dropship_Notifier {
         // Get billing phone — always available
         $billing_phone = $billing['phone'] ?? '';
         $shipping_phone = $shipping['phone'] ?? '';
+        if ( $shipping_phone === '' ) {
+            $shipping_phone = (string) $order->get_meta( '_shipping_phone', true );
+        }
 
         $items_by_rep = [];
 
