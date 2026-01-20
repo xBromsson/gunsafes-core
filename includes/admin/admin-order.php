@@ -496,6 +496,13 @@ class Admin_Order {
     /*  FLEXIBLE SHIPPING INSTANCES                                        */
     /* --------------------------------------------------------------------- */
     public function add_flexible_shipping_instances( $methods ): array {
+        if ( ! is_admin() || ! function_exists( 'get_current_screen' ) ) {
+            return $methods;
+        }
+        $screen = get_current_screen();
+        if ( ! $screen ) {
+            return $methods;
+        }
         global $wpdb;
         $instances = $wpdb->get_results(
             $wpdb->prepare(
