@@ -21,7 +21,7 @@ class GScore_Checkout_Shipping_Phone {
             $fields['shipping']['shipping_phone'] = [
                 'label'       => __( 'Phone', 'gunsafes-core' ),
                 'type'        => 'tel',
-                'required'    => false,
+                'required'    => true,
                 'class'       => [ 'form-row-wide' ],
                 'priority'    => 95,
                 'autocomplete'=> 'tel',
