@@ -204,6 +204,9 @@ class GScore_Dropship_Notifier {
                 <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;">
                 <div style="margin-bottom:10px;"><strong>Billing Address (Customer)</strong></div>
                 <div>Name: <?php echo esc_html(trim(($billing['first_name'] ?? '') . ' ' . ($billing['last_name'] ?? ''))); ?></div>
+                <?php if (!empty($billing['company'])): ?>
+                    <div>Company: <?php echo esc_html($billing['company']); ?></div>
+                <?php endif; ?>
                 <div>Address Line 1: <?php echo esc_html($billing['address_1'] ?? ''); ?></div>
                 <?php if (!empty($billing['address_2'])): ?>
                     <div>Address Line 2: <?php echo esc_html($billing['address_2']); ?></div>
@@ -216,6 +219,9 @@ class GScore_Dropship_Notifier {
                 <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;">
                 <div style="margin-bottom:10px;"><strong>Shipping Address (Customer)</strong></div>
                 <div>Name: <?php echo esc_html(trim(($shipping['first_name'] ?? '') . ' ' . ($shipping['last_name'] ?? ''))); ?></div>
+                <?php if (!empty($shipping['company'])): ?>
+                    <div>Company: <?php echo esc_html($shipping['company']); ?></div>
+                <?php endif; ?>
                 <div>Address Line 1: <?php echo esc_html($shipping['address_1'] ?? ''); ?></div>
                 <?php if (!empty($shipping['address_2'])): ?>
                     <div>Address Line 2: <?php echo esc_html($shipping['address_2']); ?></div>
@@ -227,6 +233,9 @@ class GScore_Dropship_Notifier {
                 
                 <?php if (!empty($customer_email)): ?>
                     <div style="margin-top:10px;">Customer Email: <?php echo esc_html($customer_email); ?></div>
+                <?php endif; ?>
+                <?php if ($order->get_customer_note()): ?>
+                    <div style="margin-top:10px;"><strong>Order Notes:</strong><br><?php echo nl2br(esc_html($order->get_customer_note())); ?></div>
                 <?php endif; ?>
 
                 <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;">
