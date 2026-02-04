@@ -1166,7 +1166,7 @@ class Admin_Order {
     /* --------------------------------------------------------------------- */
     public function update_shipping_name( $order_id, $items ): void {
         $order = wc_get_order( $order_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
         foreach ( $order->get_items( 'shipping' ) as $item ) {
@@ -1179,13 +1179,16 @@ class Admin_Order {
             return;
         }
         $order = wc_get_order( $order_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
         $this->calculate_and_update_shipping_item( $item, $order );
     }
 
-    private function calculate_and_update_shipping_item( WC_Order_Item_Shipping $item, WC_Order $order ): void {
+    private function calculate_and_update_shipping_item( WC_Order_Item_Shipping $item, WC_Abstract_Order $order ): void {
+        if ( ! ( $order instanceof WC_Order ) ) {
+            return;
+        }
         $method_id = $item->get_method_id();
         if ( ! $method_id ) {
             $posted_methods = $this->get_posted_shipping_methods();
