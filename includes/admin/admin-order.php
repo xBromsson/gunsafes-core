@@ -64,7 +64,7 @@ class Admin_Order {
             return;
         }
         $order = wc_get_order( $post_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
 
@@ -93,7 +93,7 @@ class Admin_Order {
      */
     public function detect_manual_shipping_override( $order_id, $items ) {
         $order = wc_get_order( $order_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
 
@@ -177,7 +177,7 @@ class Admin_Order {
      */
     public function detect_manual_line_item_override( $order_id, $items ) {
         $order = wc_get_order( $order_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
 
@@ -581,7 +581,7 @@ class Admin_Order {
         $addons_post = $this->parse_addons_post_data();
 
         $order = wc_get_order( $order_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
 
@@ -707,7 +707,7 @@ class Admin_Order {
      */
     public function force_recalculate_after_addons( $post_id, $post ) {
         $order = wc_get_order( $post_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
 
@@ -742,7 +742,7 @@ class Admin_Order {
         $item_id  = isset( $_POST['item_id'] ) ? absint( $_POST['item_id'] ) : 0;
 
         $order = wc_get_order( $order_id );
-        if ( ! $order ) {
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
             wp_send_json( $response );
         }
 
