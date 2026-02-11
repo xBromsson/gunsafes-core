@@ -3,7 +3,8 @@
  * Drop-ship notifications on Processing (APF-only details)
  *
  * Sends HTML email to assigned sales reps when order status changes to Processing.
- * Groups items by warehouse → sales rep (via term meta).
+ * Groups items by warehouse + recipient (assigned sales rep via term meta).
+ * Falls back to a default recipient when no warehouse rep is assigned.
  * Now includes billing phone in shipping address section.
  *
  * @package Gunsafes_Core
@@ -20,6 +21,21 @@ class GScore_Dropship_Notifier {
             return;
         }
         add_action('woocommerce_order_status_processing', [$this, 'send_dropship_notification'], 10, 1);
+    }
+
+    private function get_fallback_recipient_email( $order ): string {
+        $fallback = apply_filters( 'gscore_dropship_fallback_email', 'sales@gunsafes.com', $order );
+        $fallback = is_string( $fallback ) ? sanitize_email( $fallback ) : '';
+        if ( ! empty( $fallback ) ) {
+            return $fallback;
+        }
+
+        $woo_from = sanitize_email( (string) get_option( 'woocommerce_email_from_address', '' ) );
+        if ( ! empty( $woo_from ) ) {
+            return $woo_from;
+        }
+
+        return sanitize_email( (string) get_option( 'admin_email', '' ) );
     }
 
     // --- APF Helper: Convert complex APF values to text ---
@@ -149,7 +165,8 @@ class GScore_Dropship_Notifier {
             $shipping_phone = (string) $order->get_meta( '_shipping_phone', true );
         }
 
-        $items_by_rep = [];
+        $fallback_recipient = $this->get_fallback_recipient_email( $order );
+        $items_by_group = [];
 
         foreach ($order->get_items() as $item_id => $item) {
             if (!$item instanceof WC_Order_Item_Product) continue;
@@ -169,11 +186,33 @@ class GScore_Dropship_Notifier {
 
             foreach ($warehouse_terms as $term) {
                 $rep_user_id = get_term_meta($term->term_id, 'assigned_sales_rep', true);
-                if (!$rep_user_id) continue;
-                $user = get_userdata($rep_user_id);
-                if (!$user || empty($user->user_email)) continue;
+                $recipient_email = '';
 
-                $items_by_rep[$user->user_email][] = [
+                if ( $rep_user_id ) {
+                    $user = get_userdata( $rep_user_id );
+                    if ( $user && ! empty( $user->user_email ) ) {
+                        $recipient_email = sanitize_email( $user->user_email );
+                    }
+                }
+
+                if ( empty( $recipient_email ) ) {
+                    $recipient_email = $fallback_recipient;
+                }
+
+                if ( empty( $recipient_email ) ) {
+                    continue;
+                }
+
+                $group_key = strtolower( $recipient_email ) . '|' . (int) $term->term_id;
+                if ( ! isset( $items_by_group[ $group_key ] ) ) {
+                    $items_by_group[ $group_key ] = [
+                        'recipient_email' => $recipient_email,
+                        'warehouse_name'  => $term->name,
+                        'products'        => [],
+                    ];
+                }
+
+                $items_by_group[ $group_key ]['products'][] = [
                     'name' => $product->get_name(),
                     'sku' => $sku,
                     'mfr_part' => $mfr_part,
@@ -185,15 +224,18 @@ class GScore_Dropship_Notifier {
             }
         }
 
-        if (empty($items_by_rep)) return;
+        if (empty($items_by_group)) return;
 
-        foreach ($items_by_rep as $rep_email => $products) {
+        foreach ( $items_by_group as $group ) {
+            $rep_email = $group['recipient_email'];
+            $warehouse_name = $group['warehouse_name'];
+            $products = $group['products'];
             $rep_subtotal = array_sum(array_column($products, 'item_total'));
 
             ob_start();
             ?>
             <div style="font-family: Arial, Helvetica, sans-serif; line-height:1.4; font-size:14px;">
-                <h2 style="margin:0 0 12px 0;">New Drop Ship Order</h2>
+                <h2 style="margin:0 0 12px 0;">New Order: PO #<?php echo esc_html( $order_number ); ?> - <?php echo esc_html( $warehouse_name ); ?></h2>
 
                 <div style="margin-bottom:14px;">
                     <div><strong>Order #:</strong> <?php echo esc_html($order_number); ?></div>
@@ -259,7 +301,7 @@ class GScore_Dropship_Notifier {
 
             wp_mail(
                 $rep_email,
-                'New Drop Ship Order Notification - Order #' . $order_number,
+                'New Order: PO #' . $order_number . ' - ' . $warehouse_name,
                 $message_html,
                 ['Content-Type: text/html; charset=UTF-8']
             );
