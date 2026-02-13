@@ -410,8 +410,6 @@ class Admin_Order {
             return;
         }
 
-        error_log( sprintf( 'Gunsafes Core: save_tax_exempt_fields order #%d start', $post_id ) );
-
         $prev_exempt = $order->get_meta( '_gscore_tax_exempt', true );
         $prev_number = $order->get_meta( '_gscore_tax_exempt_number', true );
         $user_id     = $order->get_user_id();
@@ -447,20 +445,6 @@ class Admin_Order {
             update_user_meta( $user_id, '_gscore_tax_exempt', $new_exempt );
             update_user_meta( $user_id, '_gscore_tax_exempt_number', $new_number );
         }
-
-        error_log(
-            sprintf(
-                'Gunsafes Core: save_tax_exempt_fields order #%d user_id %s new_exempt %s new_number %s prev_exempt %s prev_number %s user_exempt %s user_number %s',
-                $post_id,
-                $user_id ? (string) $user_id : 'none',
-                $new_exempt,
-                $new_number === '' ? '(empty)' : $new_number,
-                $prev_exempt === '' ? '(empty)' : $prev_exempt,
-                $prev_number === '' ? '(empty)' : $prev_number,
-                $user_exempt === '' ? '(empty)' : $user_exempt,
-                $user_number === '' ? '(empty)' : $user_number
-            )
-        );
 
         $order->save();
 

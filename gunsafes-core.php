@@ -23,6 +23,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/admin-regional-markups.php';
     require_once __DIR__ . '/includes/jet-smart-filters-guard.php';
     require_once __DIR__ . '/includes/checkout-shipping-phone.php';
+    require_once __DIR__ . '/includes/checkout-paypal-cardholder-required.php';
     require_once __DIR__ . '/includes/wapf-cart-options-total-fix.php';
 
     // This one uses current_user_can() → must wait until pluggable.php is loaded
@@ -41,5 +42,9 @@ add_action( 'plugins_loaded', function() {
     if ( class_exists( 'GScore_Checkout_Shipping_Phone' ) ) {
         $shipping_phone = new GScore_Checkout_Shipping_Phone();
         $shipping_phone->register();
+    }
+    if ( class_exists( 'GScore_Checkout_PayPal_Cardholder_Required' ) ) {
+        $ppcp_cardholder = new GScore_Checkout_PayPal_Cardholder_Required();
+        $ppcp_cardholder->register();
     }
 });
