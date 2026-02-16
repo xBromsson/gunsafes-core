@@ -49,7 +49,6 @@ class Admin_Order {
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'custom_loop_add_to_cart_text' ],     20, 2 );
         add_action( 'woocommerce_before_save_order_items', [ $this, 'detect_manual_shipping_override' ], 10, 2 );
         add_action( 'woocommerce_before_save_order_items', [ $this, 'detect_manual_line_item_override' ], 10, 2 );
-        add_filter( 'woocommerce_order_needs_shipping_address', [ $this, 'force_quote_shipping_address_in_emails' ], 20, 3 );
     }
 
     /* --------------------------------------------------------------------- */
@@ -1651,33 +1650,6 @@ class Admin_Order {
     /* --------------------------------------------------------------------- */
     public function prevent_stock_reduction_for_quote( $qty, $order, $item ): int {
         return $order->get_status() === 'quote' ? 0 : $qty;
-    }
-
-    /**
-     * Quote orders are often created without shipping line items.
-     * In email/preview context, still show shipping address when shipping lines exist.
-     */
-    public function force_quote_shipping_address_in_emails( $needs_address, $hide, $order ): bool {
-        if ( ! $order instanceof WC_Order ) {
-            return (bool) $needs_address;
-        }
-
-        if ( $order->get_status() !== 'quote' ) {
-            return (bool) $needs_address;
-        }
-
-        $is_email_context = did_action( 'woocommerce_email_header' ) > 0
-            || apply_filters( 'yaymail_is_preview_email', false );
-        if ( ! $is_email_context ) {
-            return (bool) $needs_address;
-        }
-
-        $has_shipping_address = $order->get_shipping_address_1() !== '' || $order->get_shipping_address_2() !== '';
-        if ( $has_shipping_address ) {
-            return true;
-        }
-
-        return (bool) $needs_address;
     }
 
     public function hide_manual_override_meta( array $hidden ): array {
