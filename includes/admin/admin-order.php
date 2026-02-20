@@ -12,6 +12,7 @@ if ( ! class_exists( 'WooCommerce' ) ) {
  * Handles custom admin order screen functionality.
  */
 class Admin_Order {
+    private const PRODUCT_NOTE_META_KEY = 'Product Note';
 
     public function __construct() {
         if ( ! current_user_can( 'manage_woocommerce' ) ) {
@@ -558,6 +559,7 @@ class Admin_Order {
     /* --------------------------------------------------------------------- */
     public function save_order_item_addons( $order_id, $items_or_post = null ): void {
         $addons_post = $this->parse_addons_post_data();
+        $notes_post  = $this->parse_order_item_notes_post_data();
 
         $order = wc_get_order( $order_id );
         if ( ! $order || $order instanceof WC_Order_Refund ) {
@@ -572,6 +574,7 @@ class Admin_Order {
             if ( ! $product ) {
                 continue;
             }
+            $this->maybe_save_line_item_note( $item, $notes_post );
 
             $fields = $this->get_apf_fields_for_product( $product );
             $manual_override = $this->is_manual_line_item_override_enabled( $item )
@@ -728,6 +731,9 @@ class Admin_Order {
         $item = $order->get_item( $item_id );
         if ( ! $item || $item->get_type() !== 'line_item' ) {
             wp_send_json( $response );
+        }
+        if ( array_key_exists( 'order_item_note', $_POST ) ) {
+            $this->save_line_item_note( $item, wp_unslash( $_POST['order_item_note'] ) );
         }
 
         $product = $item->get_product();
@@ -1100,6 +1106,37 @@ class Admin_Order {
         return $addons_post;
     }
 
+    private function parse_order_item_notes_post_data(): array {
+        $notes_post = [];
+        if ( isset( $_POST['order_item_notes'] ) && is_array( $_POST['order_item_notes'] ) ) {
+            $notes_post = wp_unslash( $_POST['order_item_notes'] );
+        } elseif ( isset( $_POST['items'] ) && is_string( $_POST['items'] ) ) {
+            parse_str( $_POST['items'], $items_array );
+            if ( isset( $items_array['order_item_notes'] ) && is_array( $items_array['order_item_notes'] ) ) {
+                $notes_post = wp_unslash( $items_array['order_item_notes'] );
+            }
+        }
+        return $notes_post;
+    }
+
+    private function maybe_save_line_item_note( WC_Order_Item $item, array $notes_post ): void {
+        $item_id = $item->get_id();
+        if ( ! array_key_exists( $item_id, $notes_post ) && ! array_key_exists( (string) $item_id, $notes_post ) ) {
+            return;
+        }
+        $raw_note = $notes_post[ $item_id ] ?? $notes_post[ (string) $item_id ];
+        $this->save_line_item_note( $item, $raw_note );
+    }
+
+    private function save_line_item_note( WC_Order_Item $item, $raw_note ): void {
+        $note = sanitize_textarea_field( (string) $raw_note );
+        if ( $note === '' ) {
+            $item->delete_meta_data( self::PRODUCT_NOTE_META_KEY );
+            return;
+        }
+        $item->update_meta_data( self::PRODUCT_NOTE_META_KEY, $note );
+    }
+
     private function format_addon_display( $value, $field ) {
         $formatted = [];
         $type      = $field['type'];
@@ -1405,7 +1442,7 @@ class Admin_Order {
     /*  ADD-ONS COLUMN UI                                                  */
     /* --------------------------------------------------------------------- */
     public function add_addons_column_header(): void {
-        echo '<th class="item_addons sortable" data-sort="string-ins">' . esc_html__( 'Addons', 'gunsafes-core' ) . '</th>';
+        echo '<th class="item_addons sortable" data-sort="string-ins">' . esc_html__( 'Addons / Notes', 'gunsafes-core' ) . '</th>';
     }
 
     public function display_addons_column( $product, $item, $item_id ): void {
@@ -1414,72 +1451,83 @@ class Admin_Order {
             return;
         }
         $fields = $this->get_apf_fields_for_product( $product );
-        if ( empty( $fields ) ) {
-            echo '<td class="item_addons">' . esc_html__( 'No addons available', 'gunsafes-core' ) . '</td>';
-            return;
-        }
+        $saved_product_note = (string) $item->get_meta( self::PRODUCT_NOTE_META_KEY, true );
         echo '<td class="item_addons">';
-        foreach ( $fields as $field ) {
-            $field_id        = $field['id'];
-            $display_key     = sanitize_text_field( $field['label'] );
-            $saved_formatted = $item->get_meta( $display_key, true );
-            $saved_value     = $saved_formatted ? $this->parse_formatted_to_value( $saved_formatted, $field ) : '';
-            $required        = ! empty( $field['required'] ) ? ' <span class="required">*</span>' : '';
-            ?>
-            <div class="addon-field">
-                <label><?php echo esc_html( $field['label'] ) . $required; ?></label>
-                <?php if ( $field['type'] === 'checkbox' || $field['type'] === 'checkboxes' ) : ?>
-                    <div class="addon-checkbox-group">
-                        <?php
-                        $saved_values = ( $field['type'] === 'checkboxes' && ! empty( $saved_value ) )
-                            ? explode( ',', $saved_value )
-                            : ( $saved_value ? [ $saved_value ] : [] );
-                        foreach ( $field['options']['choices'] as $option ) : ?>
-                            <label style="display:block;margin-bottom:5px;">
-                                <input type="checkbox"
-                                       name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>][]"
-                                       value="<?php echo esc_attr( $option['slug'] ); ?>"
-                                       <?php checked( in_array( $option['slug'], $saved_values ) ); ?> />
-                                <?php echo esc_html( $option['label'] ); ?>
-                                <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
-                                    (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
-                                <?php endif; ?>
-                            </label>
-                        <?php endforeach; ?>
-                    </div>
-                <?php elseif ( $field['type'] === 'select' ) : ?>
-                    <select name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]" <?php echo $field['required'] ? 'required' : ''; ?>>
-                        <option value=""><?php esc_html_e( 'Select an option', 'gunsafes-core' ); ?></option>
-                        <?php foreach ( $field['options']['choices'] as $option ) : ?>
-                            <option value="<?php echo esc_attr( $option['slug'] ); ?>"
-                                    <?php selected( $saved_value, $option['slug'] ); ?>>
-                                <?php echo esc_html( $option['label'] ); ?>
-                                <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
-                                    (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
-                                <?php endif; ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                <?php elseif ( $field['type'] === 'radio' ) : ?>
-                    <div class="addon-radio-group">
-                        <?php foreach ( $field['options']['choices'] as $option ) : ?>
-                            <label style="display:block;margin-bottom:5px;">
-                                <input type="radio"
-                                       name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]"
-                                       value="<?php echo esc_attr( $option['slug'] ); ?>"
-                                       <?php checked( $saved_value, $option['slug'] ); ?>
-                                       <?php echo $field['required'] ? 'required' : ''; ?> />
-                                <?php echo esc_html( $option['label'] ); ?>
-                                <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
-                                    (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
-                                <?php endif; ?>
-                            </label>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endif; ?>
-            </div>
-            <?php
+        if ( ! empty( $fields ) ) {
+            foreach ( $fields as $field ) {
+                $field_id        = $field['id'];
+                $display_key     = sanitize_text_field( $field['label'] );
+                $saved_formatted = $item->get_meta( $display_key, true );
+                $saved_value     = $saved_formatted ? $this->parse_formatted_to_value( $saved_formatted, $field ) : '';
+                $required        = ! empty( $field['required'] ) ? ' <span class="required">*</span>' : '';
+                ?>
+                <div class="addon-field">
+                    <label><?php echo esc_html( $field['label'] ) . $required; ?></label>
+                    <?php if ( $field['type'] === 'checkbox' || $field['type'] === 'checkboxes' ) : ?>
+                        <div class="addon-checkbox-group">
+                            <?php
+                            $saved_values = ( $field['type'] === 'checkboxes' && ! empty( $saved_value ) )
+                                ? explode( ',', $saved_value )
+                                : ( $saved_value ? [ $saved_value ] : [] );
+                            foreach ( $field['options']['choices'] as $option ) : ?>
+                                <label style="display:block;margin-bottom:5px;">
+                                    <input type="checkbox"
+                                           name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>][]"
+                                           value="<?php echo esc_attr( $option['slug'] ); ?>"
+                                           <?php checked( in_array( $option['slug'], $saved_values ) ); ?> />
+                                    <?php echo esc_html( $option['label'] ); ?>
+                                    <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
+                                        (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
+                                    <?php endif; ?>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php elseif ( $field['type'] === 'select' ) : ?>
+                        <select name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]" <?php echo $field['required'] ? 'required' : ''; ?>>
+                            <option value=""><?php esc_html_e( 'Select an option', 'gunsafes-core' ); ?></option>
+                            <?php foreach ( $field['options']['choices'] as $option ) : ?>
+                                <option value="<?php echo esc_attr( $option['slug'] ); ?>"
+                                        <?php selected( $saved_value, $option['slug'] ); ?>>
+                                    <?php echo esc_html( $option['label'] ); ?>
+                                    <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
+                                        (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
+                                    <?php endif; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php elseif ( $field['type'] === 'radio' ) : ?>
+                        <div class="addon-radio-group">
+                            <?php foreach ( $field['options']['choices'] as $option ) : ?>
+                                <label style="display:block;margin-bottom:5px;">
+                                    <input type="radio"
+                                           name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]"
+                                           value="<?php echo esc_attr( $option['slug'] ); ?>"
+                                           <?php checked( $saved_value, $option['slug'] ); ?>
+                                           <?php echo $field['required'] ? 'required' : ''; ?> />
+                                    <?php echo esc_html( $option['label'] ); ?>
+                                    <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
+                                        (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
+                                    <?php endif; ?>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+                <?php
+            }
+        } else {
+            echo '<p class="gscore-no-addons">' . esc_html__( 'No addons available', 'gunsafes-core' ) . '</p>';
         }
+        ?>
+        <div class="addon-field gscore-product-note-field">
+            <label><?php esc_html_e( 'Product Note', 'gunsafes-core' ); ?></label>
+            <textarea
+                name="order_item_notes[<?php echo esc_attr( $item_id ); ?>]"
+                rows="3"
+                placeholder="<?php esc_attr_e( 'Enter custom product note shown in emails', 'gunsafes-core' ); ?>"
+            ><?php echo esc_textarea( $saved_product_note ); ?></textarea>
+        </div>
+        <?php
         echo '</td>';
     }
 
@@ -1717,7 +1765,7 @@ class Admin_Order {
                         var \$row = $(this);
                         var \$addonsTd = \$row.find('.item_addons');
                         var item_id = \$row.find('input.order_item_id').val();
-                        if(\$addonsTd.length && \$addonsTd.html().trim() !== '' && \$addonsTd.html().trim() !== '" . esc_js( esc_html__( 'No addons available', 'gunsafes-core' ) ) . "'){
+                        if(\$addonsTd.length && \$addonsTd.text().trim() !== ''){
                             var colspan = \$row.children('th, td').length;
                             var \$newRow = $('<tr class=\"addons-row\" data-item-id=\"'+item_id+'\"><td colspan=\"'+colspan+'\"></td></tr>');
                             \$newRow.find('td').append(\$addonsTd.html());
@@ -1859,13 +1907,15 @@ class Admin_Order {
                     var \$row = $(this).closest('tr.item');
                     var item_id = \$row.find('input.order_item_id').val();
                     var \$editForm = \$row.find('.edit_item');
-                    var addonData = \$editForm.find('.gunsafes-addons-edit').find('input, select').serializeArray();
+                    var addonData = \$editForm.find('.gunsafes-addons-edit').find('input, select, textarea').serializeArray();
+                    var productNote = \$editForm.find('textarea[name=\"order_item_notes['+item_id+']\"]').val() || '';
                     var data = {
                         action: 'save_order_item_addons',
                         security: woocommerce_admin_meta_boxes.order_item_nonce,
                         order_id: woocommerce_admin_meta_boxes.post_id,
                         item_id: item_id,
-                        order_item_addons: addonData
+                        order_item_addons: addonData,
+                        order_item_note: productNote
                     };
                     $.post(woocommerce_admin_meta_boxes.ajax_url, data, function(response){
                         if(response.success){
@@ -1894,6 +1944,7 @@ class Admin_Order {
             .addon-field { margin-bottom:8px; }
             .addon-field label { display:block; font-weight:bold; }
             .addon-radio-group, .addon-checkbox-group { margin-top:5px; }
+            .gscore-product-note-field textarea { width:100%; min-height:64px; }
             .required { color:red; }
             .gunsafes-addons-edit { margin-top:10px; padding:10px; background:#f8f8f8; border:1px solid #ddd; }
             #gscore_tax_exempt_number_row { display:none; }

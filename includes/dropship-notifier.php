@@ -137,6 +137,12 @@ class GScore_Dropship_Notifier {
             }
         }
 
+        // 4. Always include manual Product Note when present.
+        $product_note = trim( sanitize_textarea_field( (string) $item->get_meta( 'Product Note', true ) ) );
+        if ( $product_note !== '' ) {
+            $pairs[] = 'Product Note: ' . preg_replace( '/\s+/', ' ', $product_note );
+        }
+
         $pairs = array_values(array_unique($pairs));
         return implode(', ', array_map('wp_strip_all_tags', $pairs));
     }
