@@ -19,6 +19,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/call-for-pricing.php';
     require_once __DIR__ . '/includes/dropship-notifier.php';
     require_once __DIR__ . '/includes/email-bcc-replyto.php';
+    require_once __DIR__ . '/includes/email-estimated-delivery-time.php';
     require_once __DIR__ . '/includes/admin-bcc-settings.php';
     require_once __DIR__ . '/includes/admin-regional-markups.php';
     require_once __DIR__ . '/includes/jet-smart-filters-guard.php';
@@ -40,5 +41,9 @@ add_action( 'plugins_loaded', function() {
     if ( class_exists( 'GScore_Checkout_Shipping_Phone' ) ) {
         $shipping_phone = new GScore_Checkout_Shipping_Phone();
         $shipping_phone->register();
+    }
+    if ( class_exists( 'GScore_Email_Estimated_Delivery_Time' ) ) {
+        $estimated_delivery = new GScore_Email_Estimated_Delivery_Time();
+        $estimated_delivery->register();
     }
 });
