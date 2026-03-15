@@ -164,18 +164,25 @@ if ( ! function_exists( 'gscore_category_tree_enqueue_assets' ) ) {
 
 		$enqueued = true;
 
+		$css_rel_path = 'assets/css/category-tree.css';
+		$js_rel_path  = 'assets/js/category-tree.js';
+		$css_path     = GUNSAFES_CORE_PATH . $css_rel_path;
+		$js_path      = GUNSAFES_CORE_PATH . $js_rel_path;
+		$css_ver      = file_exists( $css_path ) ? (string) filemtime( $css_path ) : GUNSAFES_CORE_VER;
+		$js_ver       = file_exists( $js_path ) ? (string) filemtime( $js_path ) : GUNSAFES_CORE_VER;
+
 		wp_enqueue_style(
 			'gscore-category-tree',
-			GUNSAFES_CORE_URL . 'assets/css/category-tree.css',
+			GUNSAFES_CORE_URL . $css_rel_path,
 			array(),
-			GUNSAFES_CORE_VER
+			$css_ver
 		);
 
 		wp_enqueue_script(
 			'gscore-category-tree',
-			GUNSAFES_CORE_URL . 'assets/js/category-tree.js',
+			GUNSAFES_CORE_URL . $js_rel_path,
 			array(),
-			GUNSAFES_CORE_VER,
+			$js_ver,
 			true
 		);
 	}
