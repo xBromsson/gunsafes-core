@@ -26,16 +26,22 @@
 	margin-top: 2px;
 }
 
-.gsct-tree .gsct-link {
+.gsct-tree .gsct-link,
+.gsct-tree .gsct-link:link,
+.gsct-tree .gsct-link:visited {
 	flex: 1 1 auto;
-	font-size: 17px;
+	font-family: inherit !important;
+	font-size: 17px !important;
 	font-weight: 400 !important;
+	line-height: 1.35;
 	min-width: 0;
 	order: 1;
 	text-decoration: none;
 }
 
 .gsct-tree .gsct-link,
+.gsct-tree .gsct-link:link,
+.gsct-tree .gsct-link:visited,
 .gsct-tree .gsct-link:hover,
 .gsct-tree .gsct-link:focus,
 .gsct-tree .gsct-link:active {
