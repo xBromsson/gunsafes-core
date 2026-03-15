@@ -258,7 +258,11 @@ if ( ! function_exists( 'gscore_category_tree_shortcode' ) ) {
 
 		gscore_category_tree_enqueue_assets();
 
-		return '<nav id="' . esc_attr( $tree_id ) . '" class="gsct-tree" aria-label="Category navigation">' . $tree['html'] . '</nav>';
+		$output  = '<nav id="' . esc_attr( $tree_id ) . '" class="gsct-tree" aria-label="Category navigation">';
+		$output .= $tree['html'];
+		$output .= '</nav>';
+
+		return $output;
 	}
 
 	add_shortcode( 'gs_category_tree', 'gscore_category_tree_shortcode' );

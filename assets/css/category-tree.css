@@ -4,6 +4,10 @@
 	text-shadow: none;
 }
 
+.gsct-tree {
+	font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
 .gsct-tree .gsct-level {
 	list-style: none;
 	margin: 0;
@@ -24,6 +28,7 @@
 
 .gsct-tree .gsct-link {
 	flex: 1 1 auto;
+	font-size: 17px;
 	font-weight: 400 !important;
 	min-width: 0;
 	order: 1;
