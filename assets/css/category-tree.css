@@ -1,0 +1,78 @@
+.gsct-tree,
+.gsct-tree * {
+	color: #000;
+	text-shadow: none;
+}
+
+.gsct-tree .gsct-level {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.gsct-tree .gsct-row {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+	justify-content: space-between;
+}
+
+.gsct-tree .gsct-link {
+	flex: 1 1 auto;
+	min-width: 0;
+	order: 1;
+	text-decoration: none;
+}
+
+.gsct-tree .gsct-link,
+.gsct-tree .gsct-link:hover,
+.gsct-tree .gsct-link:focus,
+.gsct-tree .gsct-link:active {
+	color: #000;
+}
+
+.gsct-tree .gsct-toggle,
+.gsct-tree button.gsct-toggle,
+.gsct-tree .gsct-toggle.elementor-button {
+	-webkit-appearance: none !important;
+	appearance: none !important;
+	background: none !important;
+	border: none !important;
+	border-radius: 0 !important;
+	box-shadow: none !important;
+	color: #000 !important;
+	cursor: pointer;
+	font-size: 16px;
+	font-weight: 700;
+	height: auto;
+	line-height: 1;
+	margin-left: auto;
+	min-width: 0;
+	order: 2;
+	outline: none;
+	padding: 0 !important;
+	text-decoration: none;
+	transition: none !important;
+	width: auto;
+}
+
+.gsct-tree .gsct-toggle:hover,
+.gsct-tree .gsct-toggle:focus,
+.gsct-tree .gsct-toggle:active {
+	color: #000;
+}
+
+.gsct-tree .gsct-children {
+	border-left: 1px solid #ddd;
+	margin-left: 14px;
+	padding-left: 8px;
+}
+
+.gsct-tree .gsct-item.is-current > .gsct-row .gsct-link {
+	font-weight: 700;
+}
+
+.gsct-tree .gsct-count {
+	font-size: 0.9em;
+	opacity: 0.8;
+}

@@ -24,6 +24,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/admin-regional-markups.php';
     require_once __DIR__ . '/includes/jet-smart-filters-guard.php';
     require_once __DIR__ . '/includes/checkout-shipping-phone.php';
+    require_once __DIR__ . '/includes/category-tree-shortcode.php';
 
     // This one uses current_user_can() → must wait until pluggable.php is loaded
     require_once __DIR__ . '/includes/admin/admin-order.php';
