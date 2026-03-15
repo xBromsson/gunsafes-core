@@ -189,7 +189,7 @@ if ( ! function_exists( 'gscore_category_tree_shortcode' ) ) {
 				'root'           => '0',
 				'root_slug'      => '',
 				'hide_empty'     => '1',
-				'open_current'   => '0', // collapsed by default
+				'open_current'   => '1', // keep active branch expanded by default
 				'hide_meta_key'  => '',
 				'order_meta_key' => '',
 				'show_counts'    => '0',

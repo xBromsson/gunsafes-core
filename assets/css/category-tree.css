@@ -15,10 +15,16 @@
 	display: flex;
 	gap: 8px;
 	justify-content: space-between;
+	padding: 3px 0;
+}
+
+.gsct-tree .gsct-item + .gsct-item {
+	margin-top: 2px;
 }
 
 .gsct-tree .gsct-link {
 	flex: 1 1 auto;
+	font-weight: 400 !important;
 	min-width: 0;
 	order: 1;
 	text-decoration: none;
@@ -31,10 +37,17 @@
 	color: #000;
 }
 
+.gsct-tree .gsct-link:hover,
+.gsct-tree .gsct-link:focus {
+	color: #222;
+	font-weight: 600 !important;
+}
+
 .gsct-tree .gsct-toggle,
 .gsct-tree button.gsct-toggle,
 .gsct-tree .gsct-toggle.elementor-button {
 	-webkit-appearance: none !important;
+	align-items: center;
 	appearance: none !important;
 	background: none !important;
 	border: none !important;
@@ -42,18 +55,35 @@
 	box-shadow: none !important;
 	color: #000 !important;
 	cursor: pointer;
-	font-size: 16px;
-	font-weight: 700;
+	display: inline-flex;
+	font-size: 24px;
+	font-weight: 500;
 	height: auto;
+	justify-content: center;
 	line-height: 1;
 	margin-left: auto;
 	min-width: 0;
 	order: 2;
 	outline: none;
 	padding: 0 !important;
+	align-self: center;
 	text-decoration: none;
 	transition: none !important;
 	width: auto;
+}
+
+.gsct-tree .gsct-icon {
+	display: inline-block;
+	font-size: inherit;
+	font-weight: inherit;
+	line-height: 1;
+	text-align: center;
+	width: 1ch;
+}
+
+.gsct-tree .gsct-toggle[aria-expanded="true"] .gsct-icon {
+	transform: scaleX(1.6);
+	transform-origin: center;
 }
 
 .gsct-tree .gsct-toggle:hover,
@@ -65,11 +95,13 @@
 .gsct-tree .gsct-children {
 	border-left: 1px solid #ddd;
 	margin-left: 14px;
+	margin-top: 6px;
+	margin-bottom: 6px;
 	padding-left: 8px;
 }
 
 .gsct-tree .gsct-item.is-current > .gsct-row .gsct-link {
-	font-weight: 700;
+	font-weight: 700 !important;
 }
 
 .gsct-tree .gsct-count {
