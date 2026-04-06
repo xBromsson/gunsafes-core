@@ -1,1 +1,67 @@
-/* minimal admin styles */
+.gscore-term-sorter {
+	max-width: 760px;
+	margin-top: 12px;
+}
+
+.gscore-term-sorter__toolbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.gscore-term-sorter__search {
+	flex: 1 1 auto;
+	max-width: 320px;
+}
+
+.gscore-sortable-term-list {
+	margin: 0;
+	border: 1px solid #dcdcde;
+	background: #fff;
+}
+
+.gscore-sortable-term-list__item {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 14px;
+	margin: 0;
+	border-bottom: 1px solid #f0f0f1;
+	cursor: default;
+	background: #fff;
+}
+
+.gscore-sortable-term-list__item:last-child {
+	border-bottom: 0;
+}
+
+.gscore-sortable-term-list__handle {
+	cursor: move;
+	color: #50575e;
+	font-size: 16px;
+	line-height: 1;
+}
+
+.gscore-sortable-term-list__name {
+	font-weight: 600;
+	color: #1d2327;
+}
+
+.gscore-sortable-term-list__meta {
+	margin-left: auto;
+	color: #50575e;
+	font-size: 12px;
+}
+
+.gscore-sortable-term-list .ui-sortable-helper {
+	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.gscore-sortable-term-list .ui-sortable-placeholder {
+	visibility: visible !important;
+	background: #f6f7f7;
+	border-top: 1px dashed #8c8f94;
+	border-bottom: 1px dashed #8c8f94;
+	height: 48px;
+}
