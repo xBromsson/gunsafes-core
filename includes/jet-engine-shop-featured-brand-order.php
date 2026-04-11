@@ -12,6 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'GScore_Jet_Engine_Shop_Featured_Brand_Order' ) ) {
 	class GScore_Jet_Engine_Shop_Featured_Brand_Order {
 		private const QUERY_ID   = 5;
+		private const QUERY_NAME = 'getShopPageFeaturedBrand';
 		private const TAXONOMY   = 'product_brand';
 		private const OPTION_KEY = 'shop-page-options_featured_brand_order_ids';
 		private const LEGACY_KEY = 'shop-page-options_featured-brands';
@@ -30,10 +31,7 @@ if ( ! class_exists( 'GScore_Jet_Engine_Shop_Featured_Brand_Order' ) ) {
 				return;
 			}
 
-			$current_query_id = isset( $query->id ) ? (int) $query->id : 0;
-			$real_query_id    = isset( $query->query_id ) ? (int) $query->query_id : 0;
-
-			if ( self::QUERY_ID !== $current_query_id && self::QUERY_ID !== $real_query_id ) {
+			if ( ! $this->is_target_query( $query ) ) {
 				return;
 			}
 
@@ -43,13 +41,15 @@ if ( ! class_exists( 'GScore_Jet_Engine_Shop_Featured_Brand_Order' ) ) {
 			}
 
 			$ordered_brand_ids = $this->get_saved_brand_order();
+			unset( $query->final_query['name'] );
+
 			if ( empty( $ordered_brand_ids ) ) {
 				$query->final_query['include'] = array( 0 );
 				return;
 			}
 
-			$query->final_query['include']    = $ordered_brand_ids;
-			$query->final_query['orderby']    = 'include';
+			$query->final_query['include']      = $ordered_brand_ids;
+			$query->final_query['orderby']      = 'include';
 			$query->final_query['hide_empty'] = ! empty( $query->final_query['hide_empty'] );
 		}
 
@@ -58,6 +58,8 @@ if ( ! class_exists( 'GScore_Jet_Engine_Shop_Featured_Brand_Order' ) ) {
 
 			if ( isset( $query->final_query['taxonomy'] ) ) {
 				$taxonomies = (array) $query->final_query['taxonomy'];
+			} elseif ( isset( $query->query['terms']['taxonomy'] ) ) {
+				$taxonomies = (array) $query->query['terms']['taxonomy'];
 			} elseif ( isset( $query->query['taxonomy'] ) ) {
 				$taxonomies = (array) $query->query['taxonomy'];
 			}
@@ -72,6 +74,22 @@ if ( ! class_exists( 'GScore_Jet_Engine_Shop_Featured_Brand_Order' ) ) {
 			);
 
 			return array_values( array_unique( $taxonomies ) );
+		}
+
+		private function is_target_query( $query ): bool {
+			$current_query_id = isset( $query->id ) ? (int) $query->id : 0;
+			$real_query_id    = isset( $query->query_id ) ? (string) $query->query_id : '';
+			$query_name       = isset( $query->name ) ? (string) $query->name : '';
+
+			if ( self::QUERY_ID === $current_query_id ) {
+				return true;
+			}
+
+			if ( (string) self::QUERY_ID === $real_query_id ) {
+				return true;
+			}
+
+			return self::QUERY_NAME === $query_name;
 		}
 
 		private function get_saved_brand_order(): array {
