@@ -27,8 +27,10 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/category-tree-shortcode.php';
     require_once __DIR__ . '/includes/admin/brand-child-order-admin.php';
     require_once __DIR__ . '/includes/admin/category-child-order-admin.php';
+    require_once __DIR__ . '/includes/admin/shop-featured-brand-order-admin.php';
     require_once __DIR__ . '/includes/jet-engine-brand-child-order.php';
     require_once __DIR__ . '/includes/jet-engine-category-child-order.php';
+    require_once __DIR__ . '/includes/jet-engine-shop-featured-brand-order.php';
 
     // This one uses current_user_can() → must wait until pluggable.php is loaded
     require_once __DIR__ . '/includes/admin/admin-order.php';
@@ -46,11 +48,17 @@ add_action( 'plugins_loaded', function() {
     if ( is_admin() && class_exists( 'GScore_Category_Child_Order_Admin' ) ) {
         new GScore_Category_Child_Order_Admin();
     }
+    if ( is_admin() && class_exists( 'GScore_Shop_Featured_Brand_Order_Admin' ) ) {
+        new GScore_Shop_Featured_Brand_Order_Admin();
+    }
     if ( class_exists( 'GScore_Jet_Engine_Brand_Child_Order' ) ) {
         new GScore_Jet_Engine_Brand_Child_Order();
     }
     if ( class_exists( 'GScore_Jet_Engine_Category_Child_Order' ) ) {
         new GScore_Jet_Engine_Category_Child_Order();
+    }
+    if ( class_exists( 'GScore_Jet_Engine_Shop_Featured_Brand_Order' ) ) {
+        new GScore_Jet_Engine_Shop_Featured_Brand_Order();
     }
     if ( class_exists( 'GScore_Jet_Smart_Filters_Guard' ) ) {
         new GScore_Jet_Smart_Filters_Guard();

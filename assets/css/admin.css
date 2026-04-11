@@ -65,3 +65,50 @@
 	border-bottom: 1px dashed #8c8f94;
 	height: 48px;
 }
+
+.gscore-featured-brand-sorter {
+	max-width: 760px;
+}
+
+.gscore-featured-brand-sorter__label {
+	display: block;
+	margin-bottom: 6px;
+	font-weight: 600;
+	color: #1d2327;
+}
+
+.gscore-sortable-term-list__item--feature-toggle {
+	gap: 14px;
+}
+
+.gscore-featured-brand-sorter__checkbox {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.gscore-featured-brand-sorter__checkbox input {
+	margin: 0;
+}
+
+.gscore-sortable-term-list__item--feature-toggle .gscore-sortable-term-list__handle {
+	margin-left: auto;
+}
+
+.gscore-sortable-term-list__item--feature-toggle:not(.is-selected) .gscore-sortable-term-list__handle {
+	visibility: hidden;
+}
+
+.gscore-sortable-term-list__item--feature-toggle:not(.is-selected) {
+	background: #fbfbfc;
+}
+
+.gscore-sortable-term-list__item--feature-toggle.is-selected {
+	background: #f0f6fc;
+}
+
+.gscore-featured-brand-sorter__note {
+	margin-top: 10px;
+}
