@@ -32,6 +32,31 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/jet-engine-category-child-order.php';
     require_once __DIR__ . '/includes/jet-engine-shop-featured-brand-order.php';
 
+    // Prevent optional PayPal Level 3 UPC data from breaking checkout.
+    add_filter(
+        'woocommerce_paypal_payments_level3_upc',
+        function( $upc, $item, $gtin ) {
+            unset( $item, $gtin );
+
+            if ( ! is_array( $upc ) || empty( $upc['code'] ) ) {
+                return null;
+            }
+
+            $code = preg_replace( '/\D+/', '', (string) $upc['code'] );
+
+            if ( strlen( $code ) !== 12 ) {
+                return null;
+            }
+
+            return array(
+                'type' => 'UPC-A',
+                'code' => $code,
+            );
+        },
+        10,
+        3
+    );
+
     // This one uses current_user_can() → must wait until pluggable.php is loaded
     require_once __DIR__ . '/includes/admin/admin-order.php';
 
