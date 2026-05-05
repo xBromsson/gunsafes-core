@@ -16,6 +16,9 @@ class GScore_Shop_Route_Guard {
 
     private const GUARD_LOG_TRANSIENT = 'gscore_shop_route_guard_last_log';
     private const GUARD_LOG_INTERVAL  = 300;
+    private const LOG_DIR_NAME        = 'gscore-logs';
+    private const LOG_FILE_NAME       = 'shop-route-guard.log';
+    private const LOG_MAX_BYTES       = 524288;
 
     /**
      * Register hooks.
@@ -229,7 +232,7 @@ class GScore_Shop_Route_Guard {
     }
 
     /**
-     * Write a compact diagnostic entry to the PHP/WP debug log.
+     * Write a compact diagnostic entry to this plugin's capped log file.
      *
      * @param string $event Event name.
      * @param array  $context Extra context.
@@ -261,7 +264,69 @@ class GScore_Shop_Route_Guard {
             $context
         );
 
-        error_log( '[Gunsafes Shop Route Guard] ' . wp_json_encode( $payload ) );
+        $this->write_log_line( '[Gunsafes Shop Route Guard] ' . wp_json_encode( $payload ) );
+    }
+
+    /**
+     * Append one line to a capped plugin-specific log file.
+     *
+     * @param string $line Log line.
+     */
+    private function write_log_line( string $line ): void {
+        $log_file = $this->get_log_file_path();
+
+        if ( ! $log_file ) {
+            return;
+        }
+
+        $max_bytes = defined( 'GUNSAFES_SHOP_ROUTE_GUARD_LOG_MAX_BYTES' )
+            ? (int) GUNSAFES_SHOP_ROUTE_GUARD_LOG_MAX_BYTES
+            : self::LOG_MAX_BYTES;
+
+        if ( $max_bytes > 0 && file_exists( $log_file ) && filesize( $log_file ) > $max_bytes ) {
+            @rename( $log_file, $log_file . '.1' );
+        }
+
+        $entry = '[' . gmdate( 'Y-m-d H:i:s' ) . ' UTC] ' . $line . PHP_EOL;
+
+        @file_put_contents( $log_file, $entry, FILE_APPEND | LOCK_EX );
+    }
+
+    /**
+     * Get or create the plugin-specific log file path.
+     *
+     * @return string|null
+     */
+    private function get_log_file_path(): ?string {
+        $log_dir = defined( 'GUNSAFES_SHOP_ROUTE_GUARD_LOG_DIR' )
+            ? (string) GUNSAFES_SHOP_ROUTE_GUARD_LOG_DIR
+            : trailingslashit( WP_CONTENT_DIR ) . self::LOG_DIR_NAME;
+
+        if ( ! is_dir( $log_dir ) && ! wp_mkdir_p( $log_dir ) ) {
+            return null;
+        }
+
+        $this->protect_log_dir( $log_dir );
+
+        return trailingslashit( $log_dir ) . self::LOG_FILE_NAME;
+    }
+
+    /**
+     * Add basic direct-access protection for the log directory.
+     *
+     * @param string $log_dir Log directory path.
+     */
+    private function protect_log_dir( string $log_dir ): void {
+        $htaccess = trailingslashit( $log_dir ) . '.htaccess';
+        $index    = trailingslashit( $log_dir ) . 'index.php';
+
+        if ( ! file_exists( $htaccess ) ) {
+            @file_put_contents( $htaccess, "Deny from all\n" );
+        }
+
+        if ( ! file_exists( $index ) ) {
+            @file_put_contents( $index, "<?php\n// Silence is golden.\n" );
+        }
     }
 
     /**
