@@ -20,6 +20,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/dropship-notifier.php';
     require_once __DIR__ . '/includes/email-bcc-replyto.php';
     require_once __DIR__ . '/includes/email-estimated-delivery-time.php';
+    require_once __DIR__ . '/includes/admin-payment-permissions.php';
     require_once __DIR__ . '/includes/admin-bcc-settings.php';
     require_once __DIR__ . '/includes/admin-regional-markups.php';
     require_once __DIR__ . '/includes/jet-smart-filters-guard.php';
@@ -66,6 +67,10 @@ add_action( 'plugins_loaded', function() {
     // Instantiate the admin class (only in admin area to save resources)
     if ( is_admin() && class_exists( 'Admin_Order' ) ) {
         new Admin_Order();
+    }
+    if ( class_exists( 'GScore_Admin_Payment_Permissions' ) ) {
+        $admin_payment_permissions = new GScore_Admin_Payment_Permissions();
+        $admin_payment_permissions->register();
     }
     if ( is_admin() && class_exists( 'GScore_Brand_Child_Order_Admin' ) ) {
         new GScore_Brand_Child_Order_Admin();
