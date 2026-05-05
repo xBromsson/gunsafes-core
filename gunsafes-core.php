@@ -32,6 +32,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/jet-engine-brand-child-order.php';
     require_once __DIR__ . '/includes/jet-engine-category-child-order.php';
     require_once __DIR__ . '/includes/jet-engine-shop-featured-brand-order.php';
+    require_once __DIR__ . '/includes/shop-route-guard.php';
 
     // Prevent optional PayPal Level 3 UPC data from breaking checkout.
     add_filter(
@@ -92,6 +93,10 @@ add_action( 'plugins_loaded', function() {
     }
     if ( class_exists( 'GScore_Jet_Smart_Filters_Guard' ) ) {
         new GScore_Jet_Smart_Filters_Guard();
+    }
+    if ( class_exists( 'GScore_Shop_Route_Guard' ) ) {
+        $shop_route_guard = new GScore_Shop_Route_Guard();
+        $shop_route_guard->register();
     }
     if ( class_exists( 'GScore_Checkout_Shipping_Phone' ) ) {
         $shipping_phone = new GScore_Checkout_Shipping_Phone();
