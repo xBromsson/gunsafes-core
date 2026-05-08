@@ -19,6 +19,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/call-for-pricing.php';
     require_once __DIR__ . '/includes/dropship-notifier.php';
     require_once __DIR__ . '/includes/email-bcc-replyto.php';
+    require_once __DIR__ . '/includes/email-coupon-discount-label.php';
     require_once __DIR__ . '/includes/email-estimated-delivery-time.php';
     require_once __DIR__ . '/includes/admin-payment-permissions.php';
     require_once __DIR__ . '/includes/admin-bcc-settings.php';
@@ -105,5 +106,9 @@ add_action( 'plugins_loaded', function() {
     if ( class_exists( 'GScore_Email_Estimated_Delivery_Time' ) ) {
         $estimated_delivery = new GScore_Email_Estimated_Delivery_Time();
         $estimated_delivery->register();
+    }
+    if ( class_exists( 'GScore_Email_Coupon_Discount_Label' ) ) {
+        $coupon_discount_label = new GScore_Email_Coupon_Discount_Label();
+        $coupon_discount_label->register();
     }
 });
