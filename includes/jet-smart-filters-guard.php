@@ -1,6 +1,6 @@
 <?php
 /**
- * Guard against Jet Smart Filters AJAX params breaking add-to-cart.
+ * Guard against Jet Smart Filters AJAX params breaking shop interactions.
  *
  * @package Gunsafes_Core
  */
@@ -12,8 +12,38 @@ if ( ! defined( 'ABSPATH' ) ) {
 class GScore_Jet_Smart_Filters_Guard {
 
     public function __construct() {
+        add_action( 'elementor/widget/before_render_content', [ $this, 'store_products_widget_ajax_settings' ], 20 );
         add_filter( 'woocommerce_product_add_to_cart_url', [ $this, 'strip_jsf_params' ], 20, 2 );
         add_action( 'template_redirect', [ $this, 'redirect_clean_add_to_cart' ], 1 );
+    }
+
+    public function store_products_widget_ajax_settings( $widget ): void {
+        if (
+            ! is_object( $widget )
+            || ! method_exists( $widget, 'get_name' )
+            || 'woocommerce-products' !== $widget->get_name()
+            || ! method_exists( $widget, 'get_settings' )
+            || ! function_exists( 'jet_smart_filters' )
+            || empty( jet_smart_filters()->providers )
+        ) {
+            return;
+        }
+
+        $settings = $widget->get_settings();
+
+        if ( ! array_key_exists( 'automatically_align_buttons', $settings ) ) {
+            return;
+        }
+
+        $query_id = ! empty( $settings['_element_id'] ) ? $settings['_element_id'] : 'default';
+
+        jet_smart_filters()->providers->add_provider_settings(
+            'epro-products',
+            [
+                'automatically_align_buttons' => $settings['automatically_align_buttons'],
+            ],
+            $query_id
+        );
     }
 
     public function strip_jsf_params( $url, $product ) {
@@ -56,4 +86,3 @@ class GScore_Jet_Smart_Filters_Guard {
         );
     }
 }
-
