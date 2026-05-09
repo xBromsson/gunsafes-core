@@ -33,6 +33,7 @@ class Admin_Order {
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'save_tax_exempt_fields' ], 90, 2 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'preserve_coupons_before_save' ], 5, 2 );
         add_action( 'woocommerce_saved_order_items', [ $this, 'preserve_coupons_before_save' ], 5, 2 );
+        add_action( 'woocommerce_before_save_order_items', [ $this, 'sync_tax_exempt_before_order_item_save' ], 1, 2 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'save_order_item_addons' ], 100, 2 );
         add_action( 'woocommerce_saved_order_items', [ $this, 'save_order_item_addons' ], 20, 2 );
         add_action( 'woocommerce_process_shop_order_meta', [ $this, 'force_recalculate_after_addons' ], 101, 2 );
@@ -58,6 +59,9 @@ class Admin_Order {
     /* --------------------------------------------------------------------- */
     public function preserve_coupons_before_save( $post_id, $post = null ): void {
         if ( $this->is_coupon_request() ) {
+            return;
+        }
+        if ( current_filter() === 'woocommerce_process_shop_order_meta' && ! $this->is_financial_order_item_request() ) {
             return;
         }
         $order = wc_get_order( $post_id );
@@ -409,45 +413,52 @@ class Admin_Order {
 
         $prev_exempt = $order->get_meta( '_gscore_tax_exempt', true );
         $prev_number = $order->get_meta( '_gscore_tax_exempt_number', true );
-        $user_id     = $order->get_user_id();
-        $user_exempt = $user_id ? get_user_meta( $user_id, '_gscore_tax_exempt', true ) : '';
-        $user_number = $user_id ? get_user_meta( $user_id, '_gscore_tax_exempt_number', true ) : '';
-
         $new_exempt = isset( $_POST['_gscore_tax_exempt'] ) ? 'yes' : 'no';
         $new_number = isset( $_POST['_gscore_tax_exempt_number'] )
             ? sanitize_text_field( wp_unslash( $_POST['_gscore_tax_exempt_number'] ) )
             : '';
 
-        if (
-            $prev_exempt === ''
-            && $prev_number === ''
-            && $new_exempt === 'no'
-            && $new_number === ''
-            && ( $user_exempt !== '' || $user_number !== '' )
-        ) {
-            $new_exempt = $user_exempt !== '' ? $user_exempt : 'no';
-            $new_number = $user_number;
-        }
+        $this->apply_tax_exempt_state_to_order( $order, $new_exempt, $new_number, true );
 
-        if ( $new_exempt !== $prev_exempt ) {
-            $order->update_meta_data( '_gscore_tax_exempt', $new_exempt );
-        }
-        if ( $new_number !== $prev_number ) {
-            $order->update_meta_data( '_gscore_tax_exempt_number', $new_number );
-        }
-
-        $order->update_meta_data( 'is_vat_exempt', $new_exempt );
-
-        if ( $user_id ) {
-            update_user_meta( $user_id, '_gscore_tax_exempt', $new_exempt );
-            update_user_meta( $user_id, '_gscore_tax_exempt_number', $new_number );
-        }
-
-        $order->save();
-
-        if ( $new_exempt !== $prev_exempt ) {
+        if ( $new_exempt !== $prev_exempt || $new_number !== $prev_number ) {
             $order->calculate_taxes();
             $order->calculate_totals( false );
+        }
+    }
+
+    public function sync_tax_exempt_before_order_item_save( $order_id, $items ): void {
+        if ( ! is_admin() || ! current_user_can( 'manage_woocommerce' ) ) {
+            return;
+        }
+        if ( ! array_key_exists( '_gscore_tax_exempt', $_POST ) && ! array_key_exists( '_gscore_tax_exempt_number', $_POST ) ) {
+            return;
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || $order instanceof WC_Order_Refund ) {
+            return;
+        }
+
+        $posted_exempt = isset( $_POST['_gscore_tax_exempt'] ) ? sanitize_text_field( wp_unslash( $_POST['_gscore_tax_exempt'] ) ) : '';
+        $new_exempt    = $posted_exempt === 'yes' ? 'yes' : 'no';
+        $new_number = isset( $_POST['_gscore_tax_exempt_number'] )
+            ? sanitize_text_field( wp_unslash( $_POST['_gscore_tax_exempt_number'] ) )
+            : '';
+
+        $this->apply_tax_exempt_state_to_order( $order, $new_exempt, $new_number, false );
+    }
+
+    private function apply_tax_exempt_state_to_order( WC_Order $order, string $new_exempt, string $new_number, bool $update_customer_profile ): void {
+        $new_exempt = $new_exempt === 'yes' ? 'yes' : 'no';
+
+        $order->update_meta_data( '_gscore_tax_exempt', $new_exempt );
+        $order->update_meta_data( '_gscore_tax_exempt_number', $new_number );
+        $order->update_meta_data( 'is_vat_exempt', $new_exempt );
+        $order->save();
+
+        if ( $update_customer_profile && $order->get_user_id() ) {
+            update_user_meta( $order->get_user_id(), '_gscore_tax_exempt', $new_exempt );
+            update_user_meta( $order->get_user_id(), '_gscore_tax_exempt_number', $new_number );
         }
     }
 
@@ -477,82 +488,286 @@ class Admin_Order {
     /*  FLEXIBLE SHIPPING INSTANCES                                        */
     /* --------------------------------------------------------------------- */
     public function add_flexible_shipping_instances( $methods ): array {
-        if ( ! is_admin() || ! function_exists( 'get_current_screen' ) ) {
-            return $methods;
-        }
-        $screen = get_current_screen();
-        if ( ! $screen ) {
-            return $methods;
-        }
-        global $wpdb;
-        $instances = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT instance_id FROM {$wpdb->prefix}woocommerce_shipping_zone_methods WHERE method_id = %s AND is_enabled = 1",
-                'flexible_shipping_single'
-            ),
-            ARRAY_A
-        );
-        if ( ! $instances ) {
+        static $is_filtering = false;
+
+        if ( $is_filtering ) {
             return $methods;
         }
 
-        $available_instances = $instances;
-        $screen              = get_current_screen();
-        if ( is_admin() && $screen && $screen->id === 'shop_order' && isset( $_GET['post'] ) ) {
-            $order_id = absint( $_GET['post'] );
-            $order    = wc_get_order( $order_id );
-            if ( $order ) {
-                $contents = $this->get_order_contents( $order );
-                if ( ! empty( $contents ) ) {
-                    $package = [
-                        'contents'       => $contents,
-                        'contents_cost'  => array_sum( wp_list_pluck( $contents, 'line_total' ) ),
-                        'applied_coupons'=> $order->get_coupon_codes(),
-                        'user'           => [ 'ID' => $order->get_user_id() ],
-                        'destination'    => [
-                            'country'   => $order->get_shipping_country(),
-                            'state'     => $order->get_shipping_state(),
-                            'postcode'  => $order->get_shipping_postcode(),
-                            'city'      => $order->get_shipping_city(),
-                            'address'   => $order->get_shipping_address_1(),
-                            'address_2' => $order->get_shipping_address_2(),
-                        ],
-                    ];
-                    $available_instances = [];
-                    foreach ( $instances as $instance ) {
-                        $instance_id     = $instance['instance_id'];
-                        $shipping_method = WC_Shipping_Zones::get_shipping_method( $instance_id );
-                        if ( $shipping_method && $shipping_method->id === 'flexible_shipping_single' ) {
-                            $shipping_method->calculate_shipping( $package );
-                            if ( ! empty( $shipping_method->rates ) ) {
-                                $available_instances[] = $instance;
-                            }
-                        }
-                    }
+        if ( ! is_admin() ) {
+            return $methods;
+        }
+
+        $is_filtering = true;
+        try {
+            $order_id = $this->get_admin_order_id_from_request();
+            if ( ! $order_id && ! $this->is_admin_order_screen_request() ) {
+                return $methods;
+            }
+
+            global $wpdb;
+            $instances = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT instance_id FROM {$wpdb->prefix}woocommerce_shipping_zone_methods WHERE method_id = %s AND is_enabled = 1",
+                    'flexible_shipping_single'
+                ),
+                ARRAY_A
+            );
+            if ( ! $instances ) {
+                return $methods;
+            }
+
+            if ( $order_id ) {
+                $order = wc_get_order( $order_id );
+                if ( $order ) {
+                    $instances = $this->get_available_flexible_shipping_instances_for_order( $instances, $order );
                 }
             }
-        }
 
-        foreach ( $available_instances as $instance ) {
-            $instance_id = $instance['instance_id'];
-            $settings    = get_option( "woocommerce_flexible_shipping_single_{$instance_id}_settings", [] );
-            if ( isset( $settings['title'] ) ) {
-                $method_id = "flexible_shipping_{$instance_id}";
-                $methods[ $method_id ] = new class( $instance_id, $settings['title'] ) extends WC_Shipping_Method {
-                    public $instance_id;
-                    public $method_title;
-                    public function __construct( $instance_id, $title ) {
-                        $this->id           = "flexible_shipping_{$instance_id}";
-                        $this->instance_id  = $instance_id;
-                        $this->method_title = $title;
-                        $this->title        = $title;
-                    }
-                    public function init() {}
-                    public function is_available( $package ) { return true; }
-                };
+            foreach ( $instances as $instance ) {
+                $instance_id = $instance['instance_id'];
+                $settings    = get_option( "woocommerce_flexible_shipping_single_{$instance_id}_settings", [] );
+                if ( isset( $settings['title'] ) ) {
+                    $method_id = "flexible_shipping_{$instance_id}";
+                    $methods[ $method_id ] = new class( $instance_id, $settings['title'] ) extends WC_Shipping_Method {
+                        public $instance_id;
+                        public $method_title;
+                        public function __construct( $instance_id, $title ) {
+                            $this->id           = "flexible_shipping_{$instance_id}";
+                            $this->instance_id  = $instance_id;
+                            $this->method_title = $title;
+                            $this->title        = $title;
+                        }
+                        public function init() {}
+                        public function is_available( $package ) { return true; }
+                    };
+                }
+            }
+
+            return $methods;
+        } finally {
+            $is_filtering = false;
+        }
+    }
+
+    private function get_admin_order_id_from_request(): int {
+        foreach ( [ 'post', 'id', 'post_id', 'post_ID', 'order_id' ] as $key ) {
+            if ( isset( $_GET[ $key ] ) ) {
+                return absint( $_GET[ $key ] );
+            }
+            if ( isset( $_POST[ $key ] ) ) {
+                return absint( $_POST[ $key ] );
             }
         }
-        return $methods;
+        return 0;
+    }
+
+    private function is_admin_order_screen_request(): bool {
+        if ( ! function_exists( 'get_current_screen' ) ) {
+            return false;
+        }
+
+        $screen = get_current_screen();
+        if ( ! $screen ) {
+            return false;
+        }
+
+        return $screen->id === 'shop_order'
+            || $screen->id === 'woocommerce_page_wc-orders'
+            || $screen->post_type === 'shop_order';
+    }
+
+    private function get_available_flexible_shipping_instances_for_order( array $instances, WC_Order $order ): array {
+        $package = $this->build_order_shipping_package( $order );
+        if ( ! $package ) {
+            return $instances;
+        }
+
+        $available_instances = [];
+
+        return $this->with_order_shipping_calculation_context( $order, $package, function () use ( $instances, $order, &$available_instances ) {
+            foreach ( $instances as $instance ) {
+                $rate = $this->get_flexible_shipping_rate_for_order( (int) $instance['instance_id'], $order );
+                if ( $rate ) {
+                    $available_instances[] = $instance;
+                }
+            }
+
+            return $available_instances;
+        } );
+    }
+
+    private function build_order_shipping_package( WC_Order $order ): ?array {
+        $contents = $this->get_order_contents( $order );
+        if ( empty( $contents ) ) {
+            return null;
+        }
+
+        return [
+            'contents'        => $contents,
+            'contents_cost'   => array_sum( wp_list_pluck( $contents, 'line_total' ) ),
+            'applied_coupons' => $order->get_coupon_codes(),
+            'user'            => [ 'ID' => $order->get_user_id() ],
+            'destination'     => [
+                'country'   => $order->get_shipping_country(),
+                'state'     => $order->get_shipping_state(),
+                'postcode'  => $order->get_shipping_postcode(),
+                'city'      => $order->get_shipping_city(),
+                'address'   => $order->get_shipping_address_1(),
+                'address_2' => $order->get_shipping_address_2(),
+            ],
+        ];
+    }
+
+    private function with_order_shipping_calculation_context( WC_Order $order, array $package, callable $callback ) {
+        static $in_context = false;
+
+        if ( $in_context ) {
+            return $callback();
+        }
+
+        $previous_cart     = WC()->cart ?? null;
+        $previous_customer = WC()->customer ?? null;
+        $previous_user_id  = get_current_user_id();
+
+        if ( defined( 'WC_ABSPATH' ) && ! function_exists( 'wc_get_chosen_shipping_method_ids' ) ) {
+            include_once WC_ABSPATH . 'includes/wc-cart-functions.php';
+        }
+
+        if ( class_exists( 'WC_Cart' ) ) {
+            WC()->cart = $this->create_admin_shipping_calculation_cart( $package['contents'], $order );
+        }
+        if ( class_exists( 'WC_Customer' ) ) {
+            WC()->customer = $this->create_admin_shipping_calculation_customer( $order );
+        }
+
+        $in_context = true;
+        wp_set_current_user( (int) $order->get_user_id() );
+        try {
+            return $callback();
+        } finally {
+            wp_set_current_user( $previous_user_id );
+            WC()->cart     = $previous_cart;
+            WC()->customer = $previous_customer;
+            $in_context = false;
+        }
+    }
+
+    private function get_flexible_shipping_rate_for_order( int $instance_id, WC_Order $order ): ?array {
+        $settings = get_option( "woocommerce_flexible_shipping_single_{$instance_id}_settings", [] );
+        if ( ! isset( $settings['title'] ) ) {
+            return null;
+        }
+
+        $shipping_method = WC_Shipping_Zones::get_shipping_method( $instance_id );
+        if ( ! $shipping_method || $shipping_method->id !== 'flexible_shipping_single' ) {
+            return null;
+        }
+
+        $package = $this->build_order_shipping_package( $order );
+        if ( ! $package ) {
+            return null;
+        }
+
+        return $this->with_order_shipping_calculation_context( $order, $package, function () use ( $shipping_method, $settings, $package ) {
+            try {
+                $shipping_method->rates = [];
+                $shipping_method->calculate_shipping( $package );
+            } catch ( Throwable $e ) {
+                return null;
+            }
+
+            $rates = $shipping_method->rates ?? [];
+            if ( empty( $rates ) ) {
+                return null;
+            }
+
+            $rate = reset( $rates );
+            $cost = $this->apply_regional_shipping_markups( (float) $rate->cost, $package );
+            $taxes = [ 'total' => $rate->taxes ];
+
+            if ( wc_tax_enabled() && $shipping_method->tax_status === 'taxable' ) {
+                $tax_rates = WC_Tax::get_shipping_tax_rates();
+                $taxes = [ 'total' => WC_Tax::calc_tax( $cost, $tax_rates, false ) ];
+            }
+
+            return [
+                'cost'   => $cost,
+                'taxes'  => $taxes,
+                'label'  => $rate->label ?: $settings['title'],
+                'method' => $shipping_method,
+            ];
+        } );
+    }
+
+    private function create_admin_shipping_calculation_cart( array $contents, WC_Order $order ): WC_Cart {
+        return new class( $contents, $order ) extends WC_Cart {
+            private array $admin_order_contents;
+            private WC_Order $admin_order;
+
+            public function __construct( array $contents, WC_Order $order ) {
+                $this->admin_order_contents = $contents;
+                $this->admin_order          = $order;
+            }
+
+            public function get_cart_contents() {
+                return $this->admin_order_contents;
+            }
+
+            public function get_cart() {
+                return array_filter( $this->admin_order_contents );
+            }
+
+            public function get_applied_coupons() {
+                return $this->admin_order->get_coupon_codes();
+            }
+
+            public function display_prices_including_tax() {
+                return false;
+            }
+
+            public function get_displayed_subtotal() {
+                return array_sum( wp_list_pluck( $this->admin_order_contents, 'line_subtotal' ) );
+            }
+
+            public function get_subtotal() {
+                return array_sum( wp_list_pluck( $this->admin_order_contents, 'line_subtotal' ) );
+            }
+
+            public function get_discount_total() {
+                return (float) $this->admin_order->get_discount_total();
+            }
+
+            public function get_discount_tax() {
+                return (float) $this->admin_order->get_discount_tax();
+            }
+
+            public function get_coupons( $deprecated = null ) {
+                $coupons = [];
+                foreach ( $this->admin_order->get_coupon_codes() as $code ) {
+                    $coupons[ $code ] = new WC_Coupon( $code );
+                }
+                return $coupons;
+            }
+        };
+    }
+
+    private function create_admin_shipping_calculation_customer( WC_Order $order ): WC_Customer {
+        $customer = new WC_Customer( $order->get_user_id(), false );
+        $customer->set_shipping_country( $order->get_shipping_country() );
+        $customer->set_shipping_state( $order->get_shipping_state() );
+        $customer->set_shipping_postcode( $order->get_shipping_postcode() );
+        $customer->set_shipping_city( $order->get_shipping_city() );
+        $customer->set_shipping_address_1( $order->get_shipping_address_1() );
+        $customer->set_shipping_address_2( $order->get_shipping_address_2() );
+        $customer->set_billing_country( $order->get_billing_country() );
+        $customer->set_billing_state( $order->get_billing_state() );
+        $customer->set_billing_postcode( $order->get_billing_postcode() );
+        $customer->set_billing_city( $order->get_billing_city() );
+        $customer->set_billing_address_1( $order->get_billing_address_1() );
+        $customer->set_billing_address_2( $order->get_billing_address_2() );
+        $customer->set_is_vat_exempt( $order->get_meta( 'is_vat_exempt', true ) === 'yes' );
+        return $customer;
     }
 
     /* --------------------------------------------------------------------- */
@@ -575,7 +790,15 @@ class Admin_Order {
             if ( ! $product ) {
                 continue;
             }
+            $has_note_post = array_key_exists( $item_id, $notes_post ) || array_key_exists( (string) $item_id, $notes_post );
             $this->maybe_save_line_item_note( $item, $notes_post );
+
+            if ( ! array_key_exists( $item_id, $addons_post ) && ! array_key_exists( (string) $item_id, $addons_post ) ) {
+                if ( $has_note_post ) {
+                    $item->save();
+                }
+                continue;
+            }
 
             $fields = $this->get_apf_fields_for_product( $product );
             $manual_override = $this->is_manual_line_item_override_enabled( $item )
@@ -589,8 +812,9 @@ class Admin_Order {
                 $item->delete_meta_data( $display_key );
             }
 
-            // ---- 2. No add-ons posted → reset to base price ----
-            if ( ! isset( $addons_post[ $item_id ] ) ) {
+            // ---- 2. Item submitted with no selected add-ons → reset to base price ----
+            $addons = $addons_post[ $item_id ] ?? $addons_post[ (string) $item_id ];
+            if ( empty( $addons ) ) {
                 if ( $manual_override ) {
                     $this->apply_manual_line_item_override( $item, $manual_override );
                     continue;
@@ -609,7 +833,6 @@ class Admin_Order {
             }
 
             // ---- 3. Process posted add-ons ----
-            $addons      = $addons_post[ $item_id ];
             $addon_cost  = 0.0;
 
             foreach ( $fields as $field ) {
@@ -679,29 +902,24 @@ class Admin_Order {
      * Force full recalculation after add-ons during main "Update" button
      */
     public function force_recalculate_after_addons( $post_id, $post ) {
+        if ( $this->is_coupon_request() ) {
+            return;
+        }
+
         $order = wc_get_order( $post_id );
         if ( ! $order || $order instanceof WC_Order_Refund ) {
             return;
         }
 
-        $has_addons = false;
-        foreach ( $order->get_items() as $item ) {
-            if ( $item->get_type() === 'line_item' ) {
-                $product = $item->get_product();
-                if ( $product && ! empty( $this->get_apf_fields_for_product( $product ) ) ) {
-                    $has_addons = true;
-                    break;
-                }
-            }
-        }
-
         $backup_exists = ! empty( get_post_meta( $post_id, '_temp_coupon_backup', true ) );
 
-        if ( $has_addons || $backup_exists ) {
-            $order->calculate_taxes();
-            $order->calculate_totals( false );
-            delete_post_meta( $post_id, '_temp_coupon_backup' );
+        if ( ! $backup_exists && ! $this->is_financial_order_item_request() ) {
+            return;
         }
+
+        $order->calculate_taxes();
+        $order->calculate_totals( false );
+        delete_post_meta( $post_id, '_temp_coupon_backup' );
     }
 
     public function ajax_save_order_item_addons(): void {
@@ -1085,6 +1303,22 @@ class Admin_Order {
         return $addons_post;
     }
 
+    private function is_financial_order_item_request(): bool {
+        if ( ! empty( $this->parse_addons_post_data() ) ) {
+            return true;
+        }
+
+        if ( ! empty( $this->get_posted_manual_override_flags() ) || ! empty( $this->get_posted_manual_shipping_override_flags() ) ) {
+            return true;
+        }
+
+        if ( ! empty( $this->get_posted_shipping_methods() ) || ! empty( $this->get_posted_shipping_costs() ) ) {
+            return true;
+        }
+
+        return false;
+    }
+
     private function parse_order_item_notes_post_data(): array {
         $notes_post = [];
         if ( isset( $_POST['order_item_notes'] ) && is_array( $_POST['order_item_notes'] ) ) {
@@ -1120,7 +1354,7 @@ class Admin_Order {
         $formatted = [];
         $type      = $field['type'];
 
-        if ( $type === 'select' || $type === 'radio' ) {
+        if ( $this->is_single_choice_addon_type( $type ) ) {
             if ( $value === '' ) {
                 return $formatted;
             }
@@ -1142,9 +1376,9 @@ class Admin_Order {
                 }
                 $formatted[] = $txt;
             }
-        } elseif ( $type === 'checkboxes' && is_array( $value ) ) {
+        } elseif ( $this->is_multi_choice_addon_type( $type ) && is_array( $value ) ) {
             foreach ( $field['options']['choices'] as $option ) {
-                if ( in_array( $option['slug'], $value ) ) {
+                if ( in_array( $option['slug'], $value, true ) ) {
                     $txt = $option['label'];
                     if ( ! empty( $option['pricing_amount'] ) ) {
                         $txt .= ' (+$' . number_format( $option['pricing_amount'], 2 ) . ')';
@@ -1302,66 +1536,7 @@ class Admin_Order {
         }
 
         $instance_id = (int) str_replace( 'flexible_shipping_', '', $method_id );
-        $settings    = get_option( "woocommerce_flexible_shipping_single_{$instance_id}_settings", [] );
-        if ( ! isset( $settings['title'] ) ) {
-            return null;
-        }
-
-        $shipping_method = WC_Shipping_Zones::get_shipping_method( $instance_id );
-        if ( ! $shipping_method || $shipping_method->id !== 'flexible_shipping_single' ) {
-            return null;
-        }
-
-        $contents = $this->get_order_contents( $order );
-        $calculated_cost = 0.0;
-        $rates = [];
-
-        if ( ! empty( $contents ) ) {
-            $package = [
-                'contents'       => $contents,
-                'contents_cost'  => array_sum( wp_list_pluck( $contents, 'line_total' ) ),
-                'applied_coupons'=> $order->get_coupon_codes(),
-                'user'           => [ 'ID' => $order->get_user_id() ],
-                'destination'    => [
-                    'country'   => $order->get_shipping_country(),
-                    'state'     => $order->get_shipping_state(),
-                    'postcode'  => $order->get_shipping_postcode(),
-                    'city'      => $order->get_shipping_city(),
-                    'address'   => $order->get_shipping_address_1(),
-                    'address_2' => $order->get_shipping_address_2(),
-                ],
-            ];
-            $shipping_method->calculate_shipping( $package );
-            $rates = $shipping_method->rates ?? [];
-
-            if ( ! empty( $rates ) ) {
-                $rate = reset( $rates );
-                $calculated_cost = (float) $rate->cost;
-            }
-
-            $calculated_cost = $this->apply_regional_shipping_markups( $calculated_cost, $package );
-        }
-
-        $label = $settings['title'];
-        $calculated_taxes = [ 'total' => [] ];
-
-        if ( ! empty( $rates ) ) {
-            $rate = reset( $rates );
-            $label = $rate->label;
-            $calculated_taxes = [ 'total' => $rate->taxes ];
-        }
-
-        if ( wc_tax_enabled() && $shipping_method->tax_status === 'taxable' ) {
-            $tax_rates = WC_Tax::get_shipping_tax_rates();
-            $calculated_taxes = [ 'total' => WC_Tax::calc_tax( $calculated_cost, $tax_rates, false ) ];
-        }
-
-        return [
-            'cost'   => $calculated_cost,
-            'taxes'  => $calculated_taxes,
-            'label'  => $label,
-            'method' => $shipping_method,
-        ];
+        return $this->get_flexible_shipping_rate_for_order( $instance_id, $order );
     }
 
     private function get_posted_shipping_costs(): array {
@@ -1442,10 +1617,10 @@ class Admin_Order {
                 ?>
                 <div class="addon-field">
                     <label><?php echo esc_html( $field['label'] ) . $required; ?></label>
-                    <?php if ( $field['type'] === 'checkbox' || $field['type'] === 'checkboxes' ) : ?>
+                    <?php if ( $field['type'] === 'checkbox' || $this->is_multi_choice_addon_type( $field['type'] ) ) : ?>
                         <div class="addon-checkbox-group">
                             <?php
-                            $saved_values = ( $field['type'] === 'checkboxes' && ! empty( $saved_value ) )
+                            $saved_values = ( $this->is_multi_choice_addon_type( $field['type'] ) && ! empty( $saved_value ) )
                                 ? explode( ',', $saved_value )
                                 : ( $saved_value ? [ $saved_value ] : [] );
                             foreach ( $field['options']['choices'] as $option ) : ?>
@@ -1453,7 +1628,7 @@ class Admin_Order {
                                     <input type="checkbox"
                                            name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>][]"
                                            value="<?php echo esc_attr( $option['slug'] ); ?>"
-                                           <?php checked( in_array( $option['slug'], $saved_values ) ); ?> />
+                                           <?php checked( in_array( $option['slug'], $saved_values, true ) ); ?> />
                                     <?php echo esc_html( $option['label'] ); ?>
                                     <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
                                         (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
@@ -1461,8 +1636,23 @@ class Admin_Order {
                                 </label>
                             <?php endforeach; ?>
                         </div>
-                    <?php elseif ( $field['type'] === 'select' ) : ?>
-                        <select name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]" <?php echo $field['required'] ? 'required' : ''; ?>>
+                    <?php elseif ( $field['type'] === 'radio' ) : ?>
+                        <div class="addon-radio-group">
+                            <?php foreach ( $field['options']['choices'] as $option ) : ?>
+                                <label style="display:block;margin-bottom:5px;">
+                                    <input type="radio"
+                                           name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]"
+                                           value="<?php echo esc_attr( $option['slug'] ); ?>"
+                                           <?php checked( $saved_value, $option['slug'] ); ?> />
+                                    <?php echo esc_html( $option['label'] ); ?>
+                                    <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
+                                        (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
+                                    <?php endif; ?>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php elseif ( $this->is_single_choice_addon_type( $field['type'] ) ) : ?>
+                        <select name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]">
                             <option value=""><?php esc_html_e( 'Select an option', 'gunsafes-core' ); ?></option>
                             <?php foreach ( $field['options']['choices'] as $option ) : ?>
                                 <option value="<?php echo esc_attr( $option['slug'] ); ?>"
@@ -1474,22 +1664,6 @@ class Admin_Order {
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                    <?php elseif ( $field['type'] === 'radio' ) : ?>
-                        <div class="addon-radio-group">
-                            <?php foreach ( $field['options']['choices'] as $option ) : ?>
-                                <label style="display:block;margin-bottom:5px;">
-                                    <input type="radio"
-                                           name="order_item_addons[<?php echo esc_attr( $item_id ); ?>][<?php echo esc_attr( $field_id ); ?>]"
-                                           value="<?php echo esc_attr( $option['slug'] ); ?>"
-                                           <?php checked( $saved_value, $option['slug'] ); ?>
-                                           <?php echo $field['required'] ? 'required' : ''; ?> />
-                                    <?php echo esc_html( $option['label'] ); ?>
-                                    <?php if ( ! empty( $option['pricing_amount'] ) ) : ?>
-                                        (+<?php echo wc_price( $option['pricing_amount'] ); ?>)
-                                    <?php endif; ?>
-                                </label>
-                            <?php endforeach; ?>
-                        </div>
                     <?php endif; ?>
                 </div>
                 <?php
@@ -1572,7 +1746,7 @@ class Admin_Order {
         }
         $type = $field['type'];
 
-        if ( $type === 'select' || $type === 'radio' ) {
+        if ( $this->is_single_choice_addon_type( $type ) ) {
             if ( count( $clean_parts ) !== 1 ) {
                 return '';
             }
@@ -1588,7 +1762,7 @@ class Admin_Order {
                 return '';
             }
             return $clean_parts[0] === $field['label'] ? '1' : '';
-        } elseif ( $type === 'checkboxes' ) {
+        } elseif ( $this->is_multi_choice_addon_type( $type ) ) {
             $selected = [];
             foreach ( $clean_parts as $clean ) {
                 foreach ( $field['options']['choices'] as $option ) {
@@ -1607,7 +1781,7 @@ class Admin_Order {
         $cost = 0.0;
         $type = $field['type'];
 
-        if ( $type === 'select' || $type === 'radio' ) {
+        if ( $this->is_single_choice_addon_type( $type ) ) {
             if ( ! is_string( $value ) ) {
                 return $cost;
             }
@@ -1621,10 +1795,10 @@ class Admin_Order {
             if ( $value === '1' ) {
                 $cost += (float) ( $field['pricing']['amount'] ?? 0 );
             }
-        } elseif ( $type === 'checkboxes' ) {
+        } elseif ( $this->is_multi_choice_addon_type( $type ) ) {
             $values = is_array( $value ) ? $value : ( empty( $value ) ? [] : explode( ',', $value ) );
             foreach ( $field['options']['choices'] as $option ) {
-                if ( in_array( $option['slug'], $values ) ) {
+                if ( in_array( $option['slug'], $values, true ) ) {
                     $cost += (float) ( $option['pricing_amount'] ?? 0 );
                 }
             }
@@ -1641,10 +1815,8 @@ class Admin_Order {
                 continue;
             }
             $parsed_value = $this->parse_formatted_to_value( $saved_formatted, $field );
-            if ( $field['type'] === 'checkboxes' && ! empty( $parsed_value ) ) {
+            if ( $this->is_multi_choice_addon_type( $field['type'] ) && ! empty( $parsed_value ) ) {
                 $parsed_value = explode( ',', $parsed_value );
-            } else {
-                $parsed_value = (array) $parsed_value;
             }
             $addon_cost += $this->get_addon_cost_from_value( $parsed_value, $field );
         }
@@ -1684,6 +1856,47 @@ class Admin_Order {
     }
 
     private function get_apf_fields_for_product( WC_Product $product ): array {
+        if ( function_exists( 'wapf_get_field_groups_of_product' ) ) {
+            try {
+                $fields = $this->get_apf_fields_from_plugin_api( $product );
+                if ( ! empty( $fields ) ) {
+                    return $fields;
+                }
+            } catch ( Throwable $e ) {
+                // Fall back to direct meta below if APF is unavailable mid-load.
+            }
+        }
+
+        return $this->get_apf_fields_from_product_meta( $product );
+    }
+
+    private function get_apf_fields_from_plugin_api( WC_Product $product ): array {
+        $fields       = [];
+        $field_groups = wapf_get_field_groups_of_product( $product );
+        if ( empty( $field_groups ) || ! is_array( $field_groups ) ) {
+            return [];
+        }
+
+        foreach ( $field_groups as $field_group ) {
+            $group_fields = [];
+            if ( is_object( $field_group ) && isset( $field_group->fields ) && is_array( $field_group->fields ) ) {
+                $group_fields = $field_group->fields;
+            } elseif ( is_array( $field_group ) && isset( $field_group['fields'] ) && is_array( $field_group['fields'] ) ) {
+                $group_fields = $field_group['fields'];
+            }
+
+            foreach ( $group_fields as $field ) {
+                $normalized = $this->normalize_apf_field( $field );
+                if ( $normalized ) {
+                    $fields[] = $normalized;
+                }
+            }
+        }
+
+        return $fields;
+    }
+
+    private function get_apf_fields_from_product_meta( WC_Product $product ): array {
         $fields       = [];
         $product_id   = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
         $variation_id = $product->is_type( 'variation' ) ? $product->get_id() : 0;
@@ -1696,31 +1909,98 @@ class Admin_Order {
             return [];
         }
 
-        $applies = false;
-        if ( ! empty( $field_group['rule_groups'] ) ) {
-            foreach ( $field_group['rule_groups'] as $group ) {
-                foreach ( $group['rules'] as $rule ) {
-                    if ( $rule['condition'] === 'product' && ! empty( $rule['value'] ) ) {
-                        foreach ( $rule['value'] as $val ) {
-                            if ( (string) $val['id'] === (string) $product_id || (string) $val['id'] === (string) $variation_id ) {
-                                $applies = true;
-                                break 2;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if ( ! $applies ) {
-            return [];
-        }
-
         foreach ( $field_group['fields'] as $field ) {
-            if ( in_array( $field['type'], [ 'checkbox', 'checkboxes', 'select', 'radio' ], true ) ) {
-                $fields[] = $field;
+            $normalized = $this->normalize_apf_field( $field );
+            if ( $normalized ) {
+                $fields[] = $normalized;
             }
         }
         return $fields;
+    }
+
+    private function normalize_apf_field( $field ): ?array {
+        if ( is_object( $field ) && method_exists( $field, 'to_array' ) ) {
+            $field = $field->to_array();
+        } elseif ( is_object( $field ) ) {
+            $field = get_object_vars( $field );
+        }
+
+        if ( ! is_array( $field ) || empty( $field['id'] ) || empty( $field['label'] ) || empty( $field['type'] ) ) {
+            return null;
+        }
+
+        $type = (string) $field['type'];
+        if ( ! in_array( $type, $this->get_supported_apf_admin_field_types(), true ) ) {
+            return null;
+        }
+
+        $options = isset( $field['options'] ) && is_array( $field['options'] ) ? $field['options'] : [];
+        if ( empty( $options['choices'] ) && ! empty( $field['choices'] ) && is_array( $field['choices'] ) ) {
+            $options['choices'] = $field['choices'];
+        }
+        if ( empty( $options['choices'] ) || ! is_array( $options['choices'] ) ) {
+            return null;
+        }
+
+        $choices = [];
+        foreach ( $options['choices'] as $choice ) {
+            if ( is_object( $choice ) ) {
+                $choice = get_object_vars( $choice );
+            }
+            if ( ! is_array( $choice ) || empty( $choice['slug'] ) || empty( $choice['label'] ) ) {
+                continue;
+            }
+            $choices[] = [
+                'slug'           => (string) $choice['slug'],
+                'label'          => (string) $choice['label'],
+                'selected'       => ! empty( $choice['selected'] ),
+                'disabled'       => ! empty( $choice['disabled'] ),
+                'pricing_type'   => isset( $choice['pricing_type'] ) ? (string) $choice['pricing_type'] : 'none',
+                'pricing_amount' => isset( $choice['pricing_amount'] ) ? (float) $choice['pricing_amount'] : 0.0,
+            ];
+        }
+
+        if ( empty( $choices ) ) {
+            return null;
+        }
+
+        $pricing = isset( $field['pricing'] ) && is_array( $field['pricing'] ) ? $field['pricing'] : [];
+
+        return [
+            'id'       => (string) $field['id'],
+            'label'    => (string) $field['label'],
+            'type'     => $type,
+            'required' => ! empty( $field['required'] ),
+            'options'  => [ 'choices' => $choices ],
+            'pricing'  => [
+                'type'    => isset( $pricing['type'] ) ? (string) $pricing['type'] : 'none',
+                'amount'  => isset( $pricing['amount'] ) ? (float) $pricing['amount'] : 0.0,
+                'enabled' => ! empty( $pricing['enabled'] ),
+            ],
+        ];
+    }
+
+    private function get_supported_apf_admin_field_types(): array {
+        return [
+            'checkbox',
+            'checkboxes',
+            'select',
+            'radio',
+            'image-swatch',
+            'multi-image-swatch',
+            'color-swatch',
+            'multi-color-swatch',
+            'text-swatch',
+            'multi-text-swatch',
+        ];
+    }
+
+    private function is_single_choice_addon_type( string $type ): bool {
+        return in_array( $type, [ 'select', 'radio', 'image-swatch', 'color-swatch', 'text-swatch' ], true );
+    }
+
+    private function is_multi_choice_addon_type( string $type ): bool {
+        return in_array( $type, [ 'checkboxes', 'multi-image-swatch', 'multi-color-swatch', 'multi-text-swatch' ], true );
     }
 
     /* --------------------------------------------------------------------- */
@@ -1754,10 +2034,23 @@ class Admin_Order {
             wp_enqueue_style( 'gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/css/admin.css', [], GUNSAFES_CORE_VER );
             wp_enqueue_script( 'gunsafes-core-order', GUNSAFES_CORE_URL . 'assets/js/admin.js', [ 'jquery' ], GUNSAFES_CORE_VER, true );
 
+            $tax_exempt_explicit = false;
+            $order_id            = $this->get_admin_order_id_from_request();
+            if ( $order_id ) {
+                $order_for_tax_exempt_js = wc_get_order( $order_id );
+                if ( $order_for_tax_exempt_js ) {
+                    $tax_exempt_explicit = $order_for_tax_exempt_js->get_meta( '_gscore_tax_exempt', true ) !== ''
+                        || $order_for_tax_exempt_js->get_meta( '_gscore_tax_exempt_number', true ) !== ''
+                        || $order_for_tax_exempt_js->get_meta( 'is_vat_exempt', true ) !== '';
+                }
+            }
+
             // Your existing add-ons JS (unchanged)
             $addons_js = "
             jQuery(document).ready(function($){
                 var gscoreTaxExemptNonce = '" . esc_js( wp_create_nonce( 'gscore_tax_exempt' ) ) . "';
+                var gscoreOrderTaxExemptExplicit = " . ( $tax_exempt_explicit ? 'true' : 'false' ) . ";
+                var gscoreTaxExemptTouched = false;
                 function toggleTaxExemptNumber(){
                     var \$row = $('#gscore_tax_exempt_number_row');
                     if(!\$row.length){
@@ -1790,27 +2083,17 @@ class Admin_Order {
                         \$flag.val(value);
                     }
                 }
+                function getOrderItemId(\$row){
+                    return \$row.attr('data-order_item_id') || \$row.data('order_item_id') || \$row.find('input.order_item_id').val();
+                }
                 function moveAddons(){
-                    var moved = false;
+                    $('body').removeClass('gscore-addons-ready');
+                    $('tr.addons-row').remove();
+                    $('tr.item td.item_addons').show();
                     $('tr.item').each(function(){
                         var \$row = $(this);
-                        var \$addonsTd = \$row.find('.item_addons');
-                        var item_id = \$row.find('input.order_item_id').val();
-                        if(\$addonsTd.length && \$addonsTd.text().trim() !== ''){
-                            var colspan = \$row.children('th, td').length;
-                            var \$newRow = $('<tr class=\"addons-row\" data-item-id=\"'+item_id+'\"><td colspan=\"'+colspan+'\"></td></tr>');
-                            \$newRow.find('td').append(\$addonsTd.html());
-                            \$row.after(\$newRow);
-                            \$addonsTd.empty();
-                            moved = true;
-                        }
                         ensureManualFlag(\$row, 0);
                     });
-                    if(moved){
-                        $('body').addClass('gscore-addons-ready');
-                    } else {
-                        $('body').removeClass('gscore-addons-ready');
-                    }
                 }
                 moveAddons();
                 $('body').on('added_order_item',moveAddons);
@@ -1829,7 +2112,19 @@ class Admin_Order {
                 });
                 toggleTaxExemptNumber();
                 $('body').on('change click','#_gscore_tax_exempt',toggleTaxExemptNumber);
+                $('body').on('change input','#_gscore_tax_exempt,#_gscore_tax_exempt_number',function(){
+                    gscoreTaxExemptTouched = true;
+                    gscoreOrderTaxExemptExplicit = true;
+                });
+                function addTaxExemptToAjaxData(data){
+                    data._gscore_tax_exempt = $('#_gscore_tax_exempt').is(':checked') ? 'yes' : 'no';
+                    data._gscore_tax_exempt_number = $('#_gscore_tax_exempt_number').val() || '';
+                    return data;
+                }
                 function fetchTaxExemptForUser(userId){
+                    if(gscoreOrderTaxExemptExplicit || gscoreTaxExemptTouched){
+                        return;
+                    }
                     userId = parseInt(userId, 10) || 0;
                     if(!userId){
                         $('#_gscore_tax_exempt').prop('checked', false);
@@ -1874,16 +2169,14 @@ class Admin_Order {
                     }
                 });
                 $('body').on('click','.edit-order-item',function(e){
-                    var item_id = $(this).closest('tr.item').find('input.order_item_id').val();
+                    var \$clickedRow = $(this).closest('tr.item');
                     setTimeout(function(){
-                        var \$row = $('tr.item').has('input.order_item_id[value=\"'+item_id+'\"]');
-                        var \$addonsRow = \$row.next('.addons-row[data-item-id=\"'+item_id+'\"]');
-                        if(\$addonsRow.length){
-                            var \$editForm = \$row.find('.edit_item');
-                            \$editForm.append('<div class=\"gunsafes-addons-edit\">'+ \$addonsRow.find('td').html() +'</div>');
-                        }
-                        ensureManualFlag(\$row, 0);
+                        \$clickedRow.children('td.item_addons').show();
+                        ensureManualFlag(\$clickedRow, 0);
                     },100);
+                });
+                $('body').on('click','.cancel-action',function(){
+                    moveAddons();
                 });
                 $('body').on('input change','tr.item input.line_total, tr.item input.line_subtotal',function(){
                     var \$row = $(this).closest('tr.item');
@@ -1920,6 +2213,7 @@ class Admin_Order {
                     }
                 });
                 $('#woocommerce-order-items').on('woocommerce_order_meta_box_save_line_items_ajax_data', function(e, data){
+                    addTaxExemptToAjaxData(data);
                     $('tr.item').each(function(){
                         var \$row = $(this);
                         var item_id = \$row.find('input.order_item_id').val();
@@ -1934,12 +2228,18 @@ class Admin_Order {
                     });
                     return data;
                 });
+                $('#woocommerce-order-items').on('woocommerce_order_meta_box_recalculate_ajax_data', function(e, data){
+                    return addTaxExemptToAjaxData(data);
+                });
                 $('body').on('click','.save',function(e){
                     var \$row = $(this).closest('tr.item');
-                    var item_id = \$row.find('input.order_item_id').val();
-                    var \$editForm = \$row.find('.edit_item');
-                    var addonData = \$editForm.find('.gunsafes-addons-edit').find('input, select, textarea').serializeArray();
-                    var productNote = \$editForm.find('textarea[name=\"order_item_notes['+item_id+']\"]').val() || '';
+                    var item_id = getOrderItemId(\$row);
+                    var \$addonScope = \$row.children('td.item_addons');
+                    if(!\$row.length || !item_id || !\$addonScope.length){
+                        return;
+                    }
+                    var addonData = \$addonScope.find('input, select, textarea').serializeArray();
+                    var productNote = \$addonScope.find('textarea[name=\"order_item_notes['+item_id+']\"]').val() || '';
                     var data = {
                         action: 'save_order_item_addons',
                         security: woocommerce_admin_meta_boxes.order_item_nonce,
@@ -1969,9 +2269,21 @@ class Admin_Order {
 
             // Your CSS (unchanged)
             $css = '
-            body.gscore-addons-ready th.item_addons,
-            body.gscore-addons-ready td.item_addons { display:none; }
-            .addons-row td { padding:10px; background:#f8f8f8; border-top:1px solid #ddd; }
+            table.woocommerce_order_items th.item_addons,
+            table.woocommerce_order_items td.item_addons {
+                width:28%;
+                min-width:300px;
+                max-width:420px;
+                white-space:normal;
+                vertical-align:top;
+            }
+            table.woocommerce_order_items td.item_addons select,
+            table.woocommerce_order_items td.item_addons textarea {
+                width:100% !important;
+                min-width:260px;
+                max-width:100% !important;
+                box-sizing:border-box;
+            }
             .addon-field { margin-bottom:8px; }
             .addon-field label { display:block; font-weight:bold; }
             .addon-radio-group, .addon-checkbox-group { margin-top:5px; }

@@ -10,6 +10,7 @@ if ( ! class_exists( 'GScore_Admin_Payment_Permissions' ) ) {
     class GScore_Admin_Payment_Permissions {
         public function register(): void {
             add_filter( 'user_has_cap', [ $this, 'allow_managers_to_pay_customer_orders' ], 20, 3 );
+            add_action( 'template_redirect', [ $this, 'redirect_managers_after_completed_payment' ], 1 );
         }
 
         /**
@@ -40,6 +41,44 @@ if ( ! class_exists( 'GScore_Admin_Payment_Permissions' ) ) {
             $allcaps[ $requested_cap ] = true;
 
             return $allcaps;
+        }
+
+        /**
+         * PayPal can return staff to the customer pay URL after the order has
+         * already been paid. Woo then shows a misleading "cannot be paid for"
+         * notice because the order no longer needs payment. Send staff back to
+         * the order screen instead, without changing customer-facing behavior.
+         */
+        public function redirect_managers_after_completed_payment(): void {
+            if ( is_admin() || wp_doing_ajax() || ! current_user_can( 'manage_woocommerce' ) ) {
+                return;
+            }
+
+            $order_id = absint( get_query_var( 'order-pay' ) );
+            if ( ! $order_id || ! function_exists( 'wc_get_order' ) ) {
+                return;
+            }
+
+            $order_key = isset( $_GET['key'] ) ? wc_clean( wp_unslash( $_GET['key'] ) ) : '';
+            if ( $order_key === '' ) {
+                return;
+            }
+
+            $order = wc_get_order( $order_id );
+            if ( ! $order || $order instanceof WC_Order_Refund || ! hash_equals( $order->get_order_key(), $order_key ) ) {
+                return;
+            }
+
+            if ( $order->needs_payment() || ! $this->order_has_completed_payment( $order ) ) {
+                return;
+            }
+
+            wp_safe_redirect( $order->get_edit_order_url() );
+            exit;
+        }
+
+        private function order_has_completed_payment( WC_Order $order ): bool {
+            return (bool) $order->get_date_paid() || $order->get_transaction_id() !== '';
         }
     }
 }
