@@ -13,6 +13,7 @@ if ( ! class_exists( 'WooCommerce' ) ) {
  */
 class Admin_Order {
     private const PRODUCT_NOTE_META_KEY = 'Product Note';
+    private const ORDER_ITEM_BASE_PRICE_META_KEY = '_gscore_order_item_base_price';
 
     public function __construct() {
         if ( ! current_user_can( 'manage_woocommerce' ) ) {
@@ -581,20 +582,10 @@ class Admin_Order {
                 ? $this->get_manual_line_item_override( $item )
                 : null;
 
-            // ---- 1. Remove old add-on meta & calculate previous cost (for logging) ----
-            $previous_addon_cost = 0.0;
+            // ---- 1. Remove old add-on meta & calculate previous cost ----
+            $previous_addon_cost = $this->get_saved_addon_cost( $item, $fields );
             foreach ( $fields as $field ) {
                 $display_key   = sanitize_text_field( $field['label'] );
-                $saved_formatted = $item->get_meta( $display_key, true );
-                if ( $saved_formatted ) {
-                    $parsed_value = $this->parse_formatted_to_value( $saved_formatted, $field );
-                    if ( $field['type'] === 'checkboxes' && ! empty( $parsed_value ) ) {
-                        $parsed_value = explode( ',', $parsed_value );
-                    } else {
-                        $parsed_value = (array) $parsed_value;
-                    }
-                    $previous_addon_cost += $this->get_addon_cost_from_value( $parsed_value, $field );
-                }
                 $item->delete_meta_data( $display_key );
             }
 
@@ -605,7 +596,7 @@ class Admin_Order {
                     continue;
                 }
                 $quantity      = $item->get_quantity();
-                $base_price    = (float) $product->get_price();
+                $base_price    = $this->get_order_item_base_price( $item, $product, $previous_addon_cost, true );
                 $new_subtotal  = $base_price * $quantity;
 
                 $item->set_subtotal( $new_subtotal );
@@ -650,7 +641,7 @@ class Admin_Order {
 
             // ---- 4. Set new line totals & recalc taxes ----
             $quantity     = $item->get_quantity();
-            $base_price   = (float) $product->get_price();
+            $base_price   = $this->get_order_item_base_price( $item, $product, $previous_addon_cost, true );
             $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
 
             $item->set_subtotal( $new_subtotal );
@@ -747,6 +738,7 @@ class Admin_Order {
             : null;
 
         // ---- 1. Remove old meta ----
+        $previous_addon_cost = $this->get_saved_addon_cost( $item, $fields );
         foreach ( $fields as $field ) {
             $display_key = sanitize_text_field( $field['label'] );
             $item->delete_meta_data( $display_key );
@@ -783,7 +775,7 @@ class Admin_Order {
                 $this->apply_manual_line_item_override( $item, $manual_override );
             } else {
                 $quantity     = $item->get_quantity();
-                $base_price   = (float) $product->get_price();
+                $base_price   = $this->get_order_item_base_price( $item, $product, $previous_addon_cost, true );
                 $new_subtotal = $base_price * $quantity;
 
                 $item->set_subtotal( $new_subtotal );
@@ -832,7 +824,7 @@ class Admin_Order {
         } else {
             // ---- 5. Set totals & recalc taxes ----
             $quantity     = $item->get_quantity();
-            $base_price   = (float) $product->get_price();
+            $base_price   = $this->get_order_item_base_price( $item, $product, $previous_addon_cost, true );
             $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
 
             $item->set_subtotal( $new_subtotal );
@@ -1041,6 +1033,7 @@ class Admin_Order {
         if ( empty( $fields ) ) {
             return null;
         }
+        $saved_addon_cost = $this->get_saved_addon_cost( $item, $fields );
         $addons     = $addons_post[ $item_id ];
         $addon_cost = 0.0;
         foreach ( $fields as $field ) {
@@ -1054,7 +1047,7 @@ class Admin_Order {
             $addon_cost += $this->get_addon_cost_from_value( $value, $field );
         }
         $quantity     = $item->get_quantity();
-        $base_price   = (float) $product->get_price();
+        $base_price   = $this->get_order_item_base_price( $item, $product, $saved_addon_cost );
         $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
 
         return [
@@ -1068,23 +1061,9 @@ class Admin_Order {
         if ( empty( $fields ) ) {
             return null;
         }
-        $addon_cost = 0.0;
-        foreach ( $fields as $field ) {
-            $display_key = sanitize_text_field( $field['label'] );
-            $saved_formatted = $item->get_meta( $display_key, true );
-            if ( ! $saved_formatted ) {
-                continue;
-            }
-            $parsed_value = $this->parse_formatted_to_value( $saved_formatted, $field );
-            if ( $field['type'] === 'checkboxes' && ! empty( $parsed_value ) ) {
-                $parsed_value = explode( ',', $parsed_value );
-            } else {
-                $parsed_value = (array) $parsed_value;
-            }
-            $addon_cost += $this->get_addon_cost_from_value( $parsed_value, $field );
-        }
+        $addon_cost = $this->get_saved_addon_cost( $item, $fields );
         $quantity     = $item->get_quantity();
-        $base_price   = (float) $product->get_price();
+        $base_price   = $this->get_order_item_base_price( $item, $product, $addon_cost );
         $new_subtotal = ( $base_price + $addon_cost ) * $quantity;
 
         return [
@@ -1653,6 +1632,57 @@ class Admin_Order {
         return $cost;
     }
 
+    private function get_saved_addon_cost( WC_Order_Item $item, array $fields ): float {
+        $addon_cost = 0.0;
+        foreach ( $fields as $field ) {
+            $display_key     = sanitize_text_field( $field['label'] );
+            $saved_formatted = $item->get_meta( $display_key, true );
+            if ( ! $saved_formatted ) {
+                continue;
+            }
+            $parsed_value = $this->parse_formatted_to_value( $saved_formatted, $field );
+            if ( $field['type'] === 'checkboxes' && ! empty( $parsed_value ) ) {
+                $parsed_value = explode( ',', $parsed_value );
+            } else {
+                $parsed_value = (array) $parsed_value;
+            }
+            $addon_cost += $this->get_addon_cost_from_value( $parsed_value, $field );
+        }
+        return $addon_cost;
+    }
+
+    private function get_order_item_base_price( WC_Order_Item $item, WC_Product $product, float $saved_addon_cost = 0.0, bool $persist = false ): float {
+        $stored_base_price = $item->get_meta( self::ORDER_ITEM_BASE_PRICE_META_KEY, true );
+        if ( $stored_base_price !== '' && is_numeric( $stored_base_price ) ) {
+            return (float) $stored_base_price;
+        }
+
+        $quantity = (float) $item->get_quantity();
+        if ( $quantity <= 0 ) {
+            $quantity = 1.0;
+        }
+
+        $line_subtotal = (float) $item->get_subtotal();
+        $base_price    = null;
+        if ( $line_subtotal > 0 ) {
+            $derived_base_price = ( $line_subtotal / $quantity ) - $saved_addon_cost;
+            $base_price = $derived_base_price >= 0
+                ? $derived_base_price
+                : $line_subtotal / $quantity;
+        }
+
+        if ( $base_price === null ) {
+            $base_price = (float) $product->get_price();
+        }
+
+        $base_price = max( 0.0, $base_price );
+        if ( $persist ) {
+            $item->update_meta_data( self::ORDER_ITEM_BASE_PRICE_META_KEY, wc_format_decimal( $base_price, '' ) );
+        }
+
+        return $base_price;
+    }
+
     private function get_apf_fields_for_product( WC_Product $product ): array {
         $fields       = [];
         $product_id   = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
@@ -1701,6 +1731,7 @@ class Admin_Order {
     }
 
     public function hide_manual_override_meta( array $hidden ): array {
+        $hidden[] = self::ORDER_ITEM_BASE_PRICE_META_KEY;
         $hidden[] = '_manual_line_item_override_enabled';
         $hidden[] = '_manual_line_total_override';
         $hidden[] = '_manual_line_subtotal_override';
