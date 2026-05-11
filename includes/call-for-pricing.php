@@ -21,6 +21,7 @@ add_action('woocommerce_process_product_meta', 'gc_save_call_for_pricing_field')
 function gc_save_call_for_pricing_field($post_id) {
     $call_for_pricing = isset($_POST['_call_for_pricing']) ? 'yes' : 'no';
     update_post_meta($post_id, '_call_for_pricing', $call_for_pricing);
+    delete_transient( 'wc_product_price_' . $post_id );
 }
 
 /* ------------------------------------------------------------------
@@ -30,20 +31,9 @@ add_filter( 'woocommerce_get_price_html', 'gc_modify_price_display', 100, 2 );
 function gc_modify_price_display( $price_html, $product ) {
     $cfp = get_post_meta( $product->get_id(), '_call_for_pricing', true );
 
-    // ----------------------------------------------------------------
-    // If CFP is ON → replace price + force cache clear
-    // ----------------------------------------------------------------
     if ( $cfp === 'yes' ) {
-        // Delete the transient that WC caches for the price HTML
-        delete_transient( 'wc_product_price_' . $product->get_id() );
-
         return '<span class="call-for-pricing">Call for pricing</span>';
     }
-
-    // ----------------------------------------------------------------
-    // CFP is OFF → make sure any old transient is gone
-    // ----------------------------------------------------------------
-    delete_transient( 'wc_product_price_' . $product->get_id() );
 
     return $price_html;
 }
