@@ -113,7 +113,8 @@ class GScore_Dropship_Notifier {
         $have_payload = !empty($label_allowlist);
         $blacklist = [
             '_product_id','_variation_id','_line_total','_line_tax','_line_subtotal',
-            '_line_subtotal_tax','_line_tax_data','_alg_wc_cog_item_cost','_reduced_stock',
+            '_line_subtotal_tax','_line_tax_data','_alg_wc_cog_item_cost','_wc_cog_item_cost',
+            '_wc_cog_item_total_cost','_wc_cog_order_total_cost','_wc_cog_cost','_wc_cog_cost_variable','_reduced_stock',
             '_qty','_tax_class','_tax_status','_downloadable','_virtual','_backorders',
             '_manage_stock','_stock','_sku','Method','warehouse','Warehouse'
         ];
@@ -145,6 +146,49 @@ class GScore_Dropship_Notifier {
 
         $pairs = array_values(array_unique($pairs));
         return implode(', ', array_map('wp_strip_all_tags', $pairs));
+    }
+
+    private function get_dropship_item_costs( WC_Order_Item_Product $item, WC_Product $product ): array {
+        $qty = max( 0, (int) $item->get_quantity() );
+
+        $unit_cost  = $this->get_positive_meta_cost( $item, '_wc_cog_item_cost' );
+        $total_cost = $this->get_positive_meta_cost( $item, '_wc_cog_item_total_cost' );
+
+        if ( $unit_cost <= 0 ) {
+            $unit_cost = $this->get_positive_meta_cost( $item, '_alg_wc_cog_item_cost' );
+        }
+
+        if ( $unit_cost <= 0 && $total_cost > 0 && $qty > 0 ) {
+            $unit_cost = $total_cost / $qty;
+        }
+
+        if ( $unit_cost <= 0 ) {
+            $unit_cost = $this->get_skyverge_product_cost( $product );
+        }
+
+        if ( $total_cost <= 0 && $unit_cost > 0 && $qty > 0 ) {
+            $total_cost = $unit_cost * $qty;
+        }
+
+        return [
+            'unit_cost'  => $unit_cost > 0 ? (float) $unit_cost : 0.0,
+            'item_total' => $total_cost > 0 ? (float) $total_cost : 0.0,
+        ];
+    }
+
+    private function get_positive_meta_cost( WC_Order_Item_Product $item, string $meta_key ): float {
+        $value = (float) $item->get_meta( $meta_key, true );
+        return $value > 0 ? $value : 0.0;
+    }
+
+    private function get_skyverge_product_cost( WC_Product $product ): float {
+        if ( class_exists( 'WC_COG_Product' ) && method_exists( 'WC_COG_Product', 'get_cost' ) ) {
+            $cost = WC_COG_Product::get_cost( $product );
+            return is_numeric( $cost ) && (float) $cost > 0 ? (float) $cost : 0.0;
+        }
+
+        $cost = (float) $product->get_meta( '_wc_cog_cost', true );
+        return $cost > 0 ? $cost : 0.0;
     }
 
     // --- Main email sender ---
@@ -186,9 +230,10 @@ class GScore_Dropship_Notifier {
             $sku = $product->get_sku();
             $mfr_part = get_post_meta($product_id, 'manufacturer_part_number', true);
             $apf_details = $this->get_apf_details_text($item);
-            $unit_cost = (float) wc_get_order_item_meta($item_id, '_alg_wc_cog_item_cost', true);
             $qty = (int) $item->get_quantity();
-            $item_total_cost = $unit_cost * $qty;
+            $costs = $this->get_dropship_item_costs( $item, $product );
+            $unit_cost = $costs['unit_cost'];
+            $item_total_cost = $costs['item_total'];
 
             foreach ($warehouse_terms as $term) {
                 $rep_user_id = get_term_meta($term->term_id, 'assigned_sales_rep', true);
