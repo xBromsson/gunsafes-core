@@ -808,8 +808,7 @@ class Admin_Order {
             // ---- 1. Remove old add-on meta & calculate previous cost ----
             $previous_addon_cost = $this->get_saved_addon_cost( $item, $fields );
             foreach ( $fields as $field ) {
-                $display_key   = sanitize_text_field( $field['label'] );
-                $item->delete_meta_data( $display_key );
+                $this->delete_addon_display_meta( $item, $field );
             }
 
             // ---- 2. Item submitted with no selected add-ons → reset to base price ----
@@ -837,7 +836,7 @@ class Admin_Order {
 
             foreach ( $fields as $field ) {
                 $field_id    = $field['id'];
-                $display_key = sanitize_text_field( $field['label'] );
+                $display_key = $this->get_addon_display_meta_key_for_write( $item, $field );
 
                 if ( ! array_key_exists( $field_id, $addons ) ) {
                     continue;
@@ -958,8 +957,7 @@ class Admin_Order {
         // ---- 1. Remove old meta ----
         $previous_addon_cost = $this->get_saved_addon_cost( $item, $fields );
         foreach ( $fields as $field ) {
-            $display_key = sanitize_text_field( $field['label'] );
-            $item->delete_meta_data( $display_key );
+            $this->delete_addon_display_meta( $item, $field );
         }
 
         // ---- 2. Parse AJAX add-on data ----
@@ -1021,7 +1019,7 @@ class Admin_Order {
         $addon_cost = 0.0;
         foreach ( $fields as $field ) {
             $field_id    = $field['id'];
-            $display_key = sanitize_text_field( $field['label'] );
+            $display_key = $this->get_addon_display_meta_key_for_write( $item, $field );
 
             if ( ! array_key_exists( $field_id, $addons ) ) {
                 continue;
@@ -1350,6 +1348,55 @@ class Admin_Order {
         $item->update_meta_data( self::PRODUCT_NOTE_META_KEY, $note );
     }
 
+    private function get_addon_display_meta_key_candidates( array $field ): array {
+        $label   = isset( $field['label'] ) ? (string) $field['label'] : '';
+        $decoded = wp_specialchars_decode( $label, ENT_QUOTES );
+        $encoded = esc_html( $decoded );
+
+        return array_values(
+            array_unique(
+                array_filter(
+                    [
+                        sanitize_text_field( $label ),
+                        sanitize_text_field( $decoded ),
+                        sanitize_text_field( $encoded ),
+                    ],
+                    static function ( $key ) {
+                        return $key !== '';
+                    }
+                )
+            )
+        );
+    }
+
+    private function get_addon_display_meta_key_for_write( WC_Order_Item $item, array $field ): string {
+        $candidates = $this->get_addon_display_meta_key_candidates( $field );
+        foreach ( $item->get_meta_data() as $meta ) {
+            if ( in_array( (string) $meta->key, $candidates, true ) ) {
+                return (string) $meta->key;
+            }
+        }
+
+        return $candidates[0] ?? sanitize_text_field( (string) ( $field['label'] ?? '' ) );
+    }
+
+    private function get_addon_display_meta_value( WC_Order_Item $item, array $field ): string {
+        foreach ( $this->get_addon_display_meta_key_candidates( $field ) as $display_key ) {
+            $value = $item->get_meta( $display_key, true );
+            if ( $value !== '' ) {
+                return (string) $value;
+            }
+        }
+
+        return '';
+    }
+
+    private function delete_addon_display_meta( WC_Order_Item $item, array $field ): void {
+        foreach ( $this->get_addon_display_meta_key_candidates( $field ) as $display_key ) {
+            $item->delete_meta_data( $display_key );
+        }
+    }
+
     private function format_addon_display( $value, $field ) {
         $formatted = [];
         $type      = $field['type'];
@@ -1610,8 +1657,7 @@ class Admin_Order {
         if ( ! empty( $fields ) ) {
             foreach ( $fields as $field ) {
                 $field_id        = $field['id'];
-                $display_key     = sanitize_text_field( $field['label'] );
-                $saved_formatted = $item->get_meta( $display_key, true );
+                $saved_formatted = $this->get_addon_display_meta_value( $item, $field );
                 $saved_value     = $saved_formatted ? $this->parse_formatted_to_value( $saved_formatted, $field ) : '';
                 $required        = ! empty( $field['required'] ) ? ' <span class="required">*</span>' : '';
                 ?>
@@ -1809,8 +1855,7 @@ class Admin_Order {
     private function get_saved_addon_cost( WC_Order_Item $item, array $fields ): float {
         $addon_cost = 0.0;
         foreach ( $fields as $field ) {
-            $display_key     = sanitize_text_field( $field['label'] );
-            $saved_formatted = $item->get_meta( $display_key, true );
+            $saved_formatted = $this->get_addon_display_meta_value( $item, $field );
             if ( ! $saved_formatted ) {
                 continue;
             }
