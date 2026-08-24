@@ -34,6 +34,8 @@ if ( ! class_exists( 'GScore_Email_Shipping_Method_Description' ) ) {
                 return $layout;
             }
 
+            $shipping_method_name = trim( wp_kses_post( (string) $order->get_shipping_method() ) );
+
             $description_html = '';
             foreach ( $descriptions as $description ) {
                 $description_html .= sprintf(
@@ -44,8 +46,13 @@ if ( ! class_exists( 'GScore_Email_Shipping_Method_Description' ) ) {
 
             $updated_layout = preg_replace_callback(
                 '/(<tr[^>]*class="[^"]*yaymail-order-detail-row-shipping[^"]*"[^>]*>.*?<th\b[^>]*>)(.*?)(<\/th>)/is',
-                static function ( array $matches ) use ( $description_html ): string {
-                    return $matches[1] . $matches[2] . $description_html . $matches[3];
+                function ( array $matches ) use ( $description_html, $shipping_method_name ): string {
+                    $shipping_label = $this->add_shipping_method_name_if_missing(
+                        $matches[2],
+                        $shipping_method_name
+                    );
+
+                    return $matches[1] . $shipping_label . $description_html . $matches[3];
                 },
                 $layout,
                 1
@@ -83,6 +90,33 @@ if ( ! class_exists( 'GScore_Email_Shipping_Method_Description' ) ) {
             }
 
             return array_values( $descriptions );
+        }
+
+        private function add_shipping_method_name_if_missing( string $shipping_label, string $shipping_method_name ): string {
+            $method_name_text = $this->normalize_text( $shipping_method_name );
+            if ( $method_name_text === '' ) {
+                return $shipping_label;
+            }
+
+            $label_text = $this->normalize_text( $shipping_label );
+            if ( stripos( $label_text, $method_name_text ) !== false ) {
+                return $shipping_label;
+            }
+
+            $separator = $label_text === '' ? '' : ' ';
+
+            return $shipping_label
+                . $separator
+                . '<span class="gscore-shipping-method-name">'
+                . $shipping_method_name
+                . '</span>';
+        }
+
+        private function normalize_text( string $value ): string {
+            $value = html_entity_decode( wp_strip_all_tags( $value ), ENT_QUOTES, get_bloginfo( 'charset' ) );
+            $value = preg_replace( '/\s+/', ' ', $value );
+
+            return trim( (string) $value );
         }
 
         private function is_flexible_shipping_item( WC_Order_Item_Shipping $shipping_item ): bool {
