@@ -21,6 +21,7 @@ add_action( 'plugins_loaded', function() {
     require_once __DIR__ . '/includes/email-bcc-replyto.php';
     require_once __DIR__ . '/includes/email-coupon-discount-label.php';
     require_once __DIR__ . '/includes/email-estimated-delivery-time.php';
+    require_once __DIR__ . '/includes/email-shipping-method-description.php';
     require_once __DIR__ . '/includes/admin-payment-permissions.php';
     require_once __DIR__ . '/includes/admin-bcc-settings.php';
     require_once __DIR__ . '/includes/admin-regional-markups.php';
@@ -110,5 +111,9 @@ add_action( 'plugins_loaded', function() {
     if ( class_exists( 'GScore_Email_Coupon_Discount_Label' ) ) {
         $coupon_discount_label = new GScore_Email_Coupon_Discount_Label();
         $coupon_discount_label->register();
+    }
+    if ( class_exists( 'GScore_Email_Shipping_Method_Description' ) ) {
+        $shipping_method_description = new GScore_Email_Shipping_Method_Description();
+        $shipping_method_description->register();
     }
 });
