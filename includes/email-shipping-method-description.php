@@ -30,11 +30,11 @@ if ( ! class_exists( 'GScore_Email_Shipping_Method_Description' ) ) {
             }
 
             $descriptions = $this->get_shipping_method_descriptions( $order );
-            if ( empty( $descriptions ) ) {
+            $shipping_method_name = trim( wp_kses_post( (string) $order->get_shipping_method() ) );
+
+            if ( empty( $descriptions ) && $shipping_method_name === '' ) {
                 return $layout;
             }
-
-            $shipping_method_name = trim( wp_kses_post( (string) $order->get_shipping_method() ) );
 
             $description_html = '';
             foreach ( $descriptions as $description ) {
@@ -65,15 +65,15 @@ if ( ! class_exists( 'GScore_Email_Shipping_Method_Description' ) ) {
             $descriptions = [];
 
             foreach ( $order->get_items( 'shipping' ) as $shipping_item ) {
-                if (
-                    ! ( $shipping_item instanceof WC_Order_Item_Shipping )
-                    || ! $this->is_flexible_shipping_item( $shipping_item )
-                ) {
+                if ( ! ( $shipping_item instanceof WC_Order_Item_Shipping ) ) {
                     continue;
                 }
 
                 $description = $shipping_item->get_meta( 'description', true );
-                if ( ! is_scalar( $description ) || trim( (string) $description ) === '' ) {
+                if (
+                    ( ! is_scalar( $description ) || trim( (string) $description ) === '' )
+                    && $this->is_flexible_shipping_item( $shipping_item )
+                ) {
                     $description = $this->get_flexible_shipping_settings_description( $shipping_item );
                 }
 
